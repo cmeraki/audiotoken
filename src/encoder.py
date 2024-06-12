@@ -1,33 +1,15 @@
-import os
 import sys
 import torch
 import tiktoken
-import torchaudio
 from loguru import logger
 from typing import List
 from queue import Queue
 from encodec import EncodecModel
-from encodec.utils import convert_audio
+
+from .utils import process_audio
 
 logger.remove()
 logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="DEBUG")
-
-
-def process_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
-    """
-        Given an audio file, this function reads the audio file and returns the audio tensor
-        suitable for processing by the model
-        """
-    audio, sr = torchaudio.load(x)
-    audio = convert_audio(audio, sr, model_sample_rate, 1)
-    assert audio.shape[0] == 1, f"Audio needs to be mono, provided {audio.shape[0]} channels for {x}"
-    assert sr == model_sample_rate, f"Audio needs to be {model_sample_rate}Hz, provided {sr}Hz for {x}"
-    assert audio.dim() == 2, f"Audio needs to be 2D tensor, provided {audio.dim()}D for {x}"
-
-    logger.debug(f"Processed audio file {x}, shape {audio.shape}")
-
-    return audio
-
 
 class TextEncoder:
     """
@@ -165,13 +147,15 @@ class VoiceEncoder:
             yield from self.encode_global_batch(global_batch_idx)
 
 if __name__ == '__main__':
+    import os
     import pdb
     from time import time
     from pathlib import Path
     from .configs import VoiceEncoderConfig
 
-    audio_file_paths = ['~/Desktop/meraki/encodec/test_24k.wav'] * 10
+    audio_file_paths = ['~/Desktop/meraki/encodec/test_24k.wav']# * 10
     audio_files: Queue[torch.Tensor] = Queue()
+    save_path = './data/tokens_0.pt'
 
     for p in audio_file_paths:
         audio_files.put(process_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate))
@@ -195,6 +179,11 @@ if __name__ == '__main__':
         result.append(batch)
 
     logger.info(f'Encoding took {time() - start_time:.2f}s')
+
+    torch.save(
+        result,
+        os.path.abspath(save_path)
+    )
 
     audio_files_n = []
     for p in audio_file_paths:
