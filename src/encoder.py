@@ -9,7 +9,7 @@ from encodec import EncodecModel
 from .utils import process_audio
 
 logger.remove()
-logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="DEBUG")
+logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
 class TextEncoder:
     """

@@ -42,3 +42,13 @@ Open questions
 5. [Week 6] Testing of E2E pipeline
 
 ---
+
+## Encodec with better batching
+
+We implement `encodec` with batching. There are two ways to implement batching
+
+1. [Naive batching] Take a batch of audio files, pad it to the maximum length of the audio in the batch and pass it to the model
+2. [Fixed batching] Take a batch of audio files, split each audio file into smaller chunks and pass the batch of the chunk to the model. This will lead to minimum wastage of resources and ensure that you don't get OOM errors. This implementation accepts the following parameters:
+   1. 
+
+We tested both the implementations on CPU and GPU using the librispeech-test-clean dataset which is 5.4 hours long. For our setup, we noticed the following metrics:
