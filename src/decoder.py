@@ -71,7 +71,6 @@ class VoiceDecoder:
 if __name__ == '__main__':
     import pdb
     from time import time
-    from copy import deepcopy
     from pathlib import Path
 
     from .configs import VoiceDecoderConfig
