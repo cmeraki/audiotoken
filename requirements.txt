@@ -1,6 +1,5 @@
 torch
 torchaudio
-transformers
 vllm
 tiktoken
 encodec

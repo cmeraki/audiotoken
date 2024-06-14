@@ -67,7 +67,9 @@ def test_encode(voice_encoder, files, batch_size=1):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn_naive,
-        num_workers=12
+        num_workers=12,
+        prefetch_factor=8,
+        pin_memory=True
     )
 
     dataloader_batched = DataLoader(
@@ -75,7 +77,9 @@ def test_encode(voice_encoder, files, batch_size=1):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn_batched,
-        num_workers=12
+        num_workers=12,
+        prefetch_factor=8,
+        pin_memory=True
     )
 
     start_time = time.time()
