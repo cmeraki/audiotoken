@@ -31,11 +31,12 @@ class VoiceDecoder:
             self,
             bandwidth: float,
             single_segment_duration: int,
-            overlap: float = 0.1
+            overlap: float = 0.1,
+            device: str = 'cpu'
         ):
         self.model = EncodecModel.encodec_model_24khz()
         self.model.set_target_bandwidth(bandwidth)
-        self.device = torch.device('cpu')
+        self.device = torch.device(device)
         self.pad_token = 0
         self.eos_token = -1
 
@@ -43,6 +44,19 @@ class VoiceDecoder:
         self.overlap = overlap
         self.segment_length = self.model.sample_rate * single_segment_duration
         self.cutoff = int(self.model.sample_rate * self.overlap)
+
+        if device != 'cpu':
+            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+            torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+
+            self.model = self.model.to(device)
+            self.model = torch.compile(self.model)
+
+            # warmup the model
+            input = torch.randn(1, 1, self.segment_length, device=device)
+            for _ in range(50):
+                self.model(input)
 
     def __call__(self, read_q: Queue[torch.Tensor]):
         """
@@ -75,6 +89,7 @@ if __name__ == '__main__':
 
     from .configs import VoiceDecoderConfig
 
+    device='cuda:0'
 
     tokens_file_paths: List[str] = ['./data/tokens_0.pt']
     tokens: Queue[torch.Tensor] = Queue()
@@ -90,6 +105,7 @@ if __name__ == '__main__':
         bandwidth=VoiceDecoderConfig.bandwidth,
         single_segment_duration=VoiceDecoderConfig.single_segment_duration,
         overlap=VoiceDecoderConfig.overlap,
+        device=device
     )
 
     start_time = time()
@@ -102,9 +118,7 @@ if __name__ == '__main__':
         print(idx, batch.shape)
         result.append(batch)
 
-    logger.info(f'Decoding took {time() - start_time:.2f}s')
-
-    pdb.set_trace()
+    print(f'Decoding took {time() - start_time:.2f}s')
 
     # start_time = time()
 

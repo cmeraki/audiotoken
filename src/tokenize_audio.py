@@ -10,7 +10,7 @@ from .configs import VoiceEncoderConfig
 from .utils import find_audio_files
 from .datasets import AudioDataset
 
-DEVICE = torch.device('cpu')
+DEVICE = 'cuda:0'
 START_TOKEN = 0
 
 
@@ -28,9 +28,8 @@ def collate_fn_naive(batch):
     padded_waveforms = torch.stack(padded_waveforms)
     return padded_waveforms, sizes
 
-def collate_fn_smart(batch):
+def collate_fn_batched(batch):
     return batch
-
 
 def codebook_encoding(arr):
     c, n = arr.shape
@@ -68,39 +67,38 @@ def test_encode(voice_encoder, files, batch_size=1):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn_naive,
-        num_workers=4
+        num_workers=12
     )
 
-    dataloader_smart = DataLoader(
+    dataloader_batched = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=collate_fn_smart,
-        num_workers=4
+        collate_fn=collate_fn_batched,
+        num_workers=12
     )
 
-
     start_time = time.time()
-
-    for batch_index, (batch, sizes) in enumerate(tqdm(dataloader_naive)):
-        batch = batch
-        _ = model.encode(batch)
-
-    naive_time = time.time() - start_time
-    print(f"Naive encoding time: {naive_time:.2f}s")
-
-    start_time = time.time()
-    for batch_index, batch in enumerate(tqdm(dataloader_smart)):
+    for batch_index, batch in enumerate(tqdm(dataloader_batched)):
 
         audio_q = Queue(len(batch))
         for waveform in batch:
             audio_q.put(waveform)
 
-        encoded_audio = voice_encoder(audio_q, VoiceEncoderConfig.local_batch_size)
+        encoded_audio = voice_encoder(audio_q)
         for _ in encoded_audio:
             pass
 
-    print(f"Smart encoding time: {time.time() - start_time:.2f}s")
+    print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
+
+    start_time = time.time()
+
+    for batch_index, (batch, sizes) in enumerate(tqdm(dataloader_naive)):
+        batch = batch.to(DEVICE)
+        _ = model.encode(batch)
+
+    naive_time = time.time() - start_time
+    print(f"Naive encoding time: {naive_time:.2f}s")
 
 if __name__ == '__main__':
     import argparse
@@ -114,8 +112,9 @@ if __name__ == '__main__':
     voice_encoder = VoiceEncoder(
         bandwidth=VoiceEncoderConfig.bandwidth,
         single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        global_batch_size=VoiceEncoderConfig.global_batch_size,
+        batch_size=VoiceEncoderConfig.batch_size,
         overlap=VoiceEncoderConfig.overlap,
+        device=DEVICE,
     )
     files = find_audio_files(args.indir)
 

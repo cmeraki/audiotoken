@@ -27,7 +27,7 @@ if __name__ == '__main__':
     voice_encoder = VoiceEncoder(
         bandwidth=VoiceEncoderConfig.bandwidth,
         single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        global_batch_size=VoiceEncoderConfig.global_batch_size,
+        batch_size=VoiceEncoderConfig.batch_size,
         overlap=VoiceEncoderConfig.overlap,
     )
 
@@ -50,10 +50,7 @@ if __name__ == '__main__':
     ### ----------------- Batched implementation ----------------- ###
 
     start_time = time()
-    encoded_audio = voice_encoder(
-        read_q=audio_files,
-        local_batch_size=VoiceEncoderConfig.local_batch_size
-    )
+    encoded_audio = voice_encoder(read_q=audio_files)
 
     encoded_result: Queue[torch.Tensor] = Queue()
     for idx, batch in enumerate(encoded_audio):
