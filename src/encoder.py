@@ -30,11 +30,19 @@ class VoiceEncoder:
     """
     Wrapper over Encodec model to encode a list of audio files.
 
-    The input is a list of tensors which are batched in two ways:
-    1. First the audio is batched to a local batch
-    2. Then it is added to a global batch
-    3. We finally process the global batch once it is full
-    4. This way, we have uniform batch sizes for the model
+    >>> from src.encoder import VoiceEncoder
+    >>> voice_encoder = VoiceEncoder(
+    >>>    bandwidth=6.0,
+    >>>    single_segment_duration=2,
+    >>>    batch_size=100,
+    >>>    overlap=0.1,
+    >>>    device='cuda'
+    >>> )
+    >>> audio_files = Queue()
+    >>> ... # Add audio files to the queue
+    >>> encoded_audio = voice_encoder(read_q=audio_files)
+    >>> for idx, batch in enumerate(encoded_audio):
+    >>>     print(idx, batch.shape)
     """
 
     def __init__(
@@ -103,7 +111,7 @@ class VoiceEncoder:
                 )
                 codes = codes.transpose(0, 1)  # [B, K, T]
                 self.global_batch.zero_()
-                yield codes
+                return codes
 
     def __call__(self, read_q: Queue[torch.Tensor]):
         """
@@ -113,12 +121,12 @@ class VoiceEncoder:
         representing the encoded audio files
         """
         global_batch_idx = 0
+        file_pointers = []
 
         # Have a global batch size
         while not read_q.empty():
             local_sample, local_filename = read_q.get()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
-            start_idx, end_idx = global_batch_idx, global_batch_idx
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
 
@@ -126,31 +134,50 @@ class VoiceEncoder:
             # process one part that fits in the global batch now and the rest later
             if local_batch_idx + global_batch_idx > self.batch_size:
                 logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-                self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
-                end_idx = self.batch_size - global_batch_idx
-                yield from (self.encode_global_batch(self.batch_size), (start_idx, end_idx))
+
+                start_idx = global_batch_idx
+                end_idx = self.batch_size-global_batch_idx
+                # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
+                self.global_batch[start_idx:] = local_batch[:end_idx]
+                file_pointers.append((local_filename, start_idx, end_idx))
+                yield (self.encode_global_batch(self.batch_size), file_pointers)
+
                 # Flush the reamining local batch to the global batch
-                self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
-                global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
+                file_pointers = []
+                start_idx = 0
+                end_idx = local_batch_idx - end_idx
+                self.global_batch[start_idx:end_idx] = local_batch[self.batch_size-global_batch_idx:]
+                global_batch_idx = end_idx
+                file_pointers.append((local_filename, start_idx, end_idx))
                 continue
 
             # If we get a local batch that does not fill the global batch, we can add it to the global batch
             if local_batch_idx + global_batch_idx < self.batch_size:
                 logger.debug(f'Adding to global batch. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
+                start_idx = global_batch_idx
+                end_idx = global_batch_idx + local_batch_idx
+                self.global_batch[start_idx:end_idx] = local_batch
                 global_batch_idx += local_batch_idx
+                file_pointers.append((local_filename, start_idx, end_idx))
                 continue
 
             # If the local batch fills the global batch, we can yield the encoding of the global batch
             if local_batch_idx + global_batch_idx == self.batch_size:
                 logger.debug(f'Global batch is full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-                yield from self.encode_global_batch(self.batch_size)
+                start_idx = global_batch_idx
+                end_idx = global_batch_idx + local_batch_idx
+                self.global_batch[start_idx:end_idx] = local_batch
+                file_pointers.append((local_filename, start_idx, end_idx))
+                yield (self.encode_global_batch(self.batch_size), file_pointers)
+                file_pointers = []
                 global_batch_idx = 0
 
         if global_batch_idx > 0:
             logger.debug(f'Global batch is not full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-            yield from self.encode_global_batch(global_batch_idx)
+            start_idx = 0
+            end_idx = global_batch_idx
+            file_pointers.append((local_filename, start_idx, end_idx))
+            yield (self.encode_global_batch(global_batch_idx), file_pointers)
 
 if __name__ == '__main__':
     import os

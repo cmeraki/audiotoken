@@ -91,11 +91,11 @@ def test_encode(voice_encoder, files, batch_size=1):
 
     for batch_index, batch in enumerate(dataloader_batched):
         for waveform, filename in batch:
-            audio_q.put((waveform))
+            audio_q.put((waveform, filename))
 
     encoded_audio = voice_encoder(audio_q)
-    for _, idx in tqdm(encoded_audio):
-        print(idx)
+    for op in tqdm(encoded_audio):
+        # print(len(op[1]))
         pass
 
     print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
