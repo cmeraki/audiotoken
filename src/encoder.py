@@ -68,7 +68,7 @@ class VoiceEncoder:
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
             torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
-            torch.backends.cudnn.benchmark = True  # Selects the best conv algo
+            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
@@ -116,8 +116,9 @@ class VoiceEncoder:
 
         # Have a global batch size
         while not read_q.empty():
-            local_sample = read_q.get()
+            local_sample, local_filename = read_q.get()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            start_idx, end_idx = global_batch_idx, global_batch_idx
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
 
@@ -126,7 +127,8 @@ class VoiceEncoder:
             if local_batch_idx + global_batch_idx > self.batch_size:
                 logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
                 self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
-                yield from self.encode_global_batch(self.batch_size)
+                end_idx = self.batch_size - global_batch_idx
+                yield from (self.encode_global_batch(self.batch_size), (start_idx, end_idx))
                 # Flush the reamining local batch to the global batch
                 self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
                 global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)

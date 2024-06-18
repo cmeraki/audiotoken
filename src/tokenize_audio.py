@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from queue import Queue
+from pathlib import Path
 from torch.utils.data import DataLoader
 
 from .encoder import VoiceEncoder
@@ -15,7 +16,7 @@ START_TOKEN = 0
 
 
 def collate_fn_naive(batch):
-    waveforms = batch
+    waveforms, _ = zip(*batch)
     sizes = [waveform.size(1) for waveform in waveforms]
     max_length = max(sizes)
 
@@ -51,6 +52,9 @@ def add_start_token(arr):
     arr = np.insert(arr, 0, START_TOKEN)
     return arr
 
+def encode(voice_encoder, files, batch_size=1, outdir=None):
+    pass
+
 @torch.inference_mode()
 def test_encode(voice_encoder, files, batch_size=1):
 
@@ -83,15 +87,16 @@ def test_encode(voice_encoder, files, batch_size=1):
     )
 
     start_time = time.time()
-    for batch_index, batch in enumerate(tqdm(dataloader_batched)):
+    audio_q = Queue()
 
-        audio_q = Queue(len(batch))
-        for waveform in batch:
-            audio_q.put(waveform)
+    for batch_index, batch in enumerate(dataloader_batched):
+        for waveform, filename in batch:
+            audio_q.put((waveform))
 
-        encoded_audio = voice_encoder(audio_q)
-        for _ in encoded_audio:
-            pass
+    encoded_audio = voice_encoder(audio_q)
+    for _, idx in tqdm(encoded_audio):
+        print(idx)
+        pass
 
     print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
 
@@ -122,4 +127,19 @@ if __name__ == '__main__':
     )
     files = find_audio_files(args.indir)
 
-    test_encode(voice_encoder, files, batch_size=args.batch_size)
+    if args.outdir:
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        encode(
+            voice_encoder,
+            files,
+            batch_size=args.batch_size,
+            outdir=outdir
+        )
+
+    else:
+        test_encode(
+            voice_encoder,
+            files,
+            batch_size=args.batch_size,
+        )

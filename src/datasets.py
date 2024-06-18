@@ -60,7 +60,7 @@ class AudioDataset(Dataset):
     def __getitem__(self, idx):
         audio_path = self.audio_files[idx]
         waveform = process_audio(audio_path, self.sample_rate)
-        return waveform
+        return waveform, audio_path
 
 if __name__ == '__main__':
 
