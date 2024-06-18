@@ -60,13 +60,17 @@ class VoiceEncoder:
 
         self.global_batch = torch.zeros(self.batch_size, 1, self.segment_length, device=self.device)
 
+        self.model.eval()
+
         if device != 'cpu':
+            self.model = self.model.to(device)
+
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+            torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
+            torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-            self.model = self.model.to(device)
-            self.model = torch.compile(self.model)
+            self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
             input = torch.randn(1, 1, self.segment_length, device=device)
@@ -91,14 +95,15 @@ class VoiceEncoder:
         return torch.vstack(segments).unsqueeze(1), len(segments)
 
     def encode_global_batch(self, global_batch_idx: int):
-        with torch.no_grad():
-            emb = self.model.encoder(self.global_batch[:global_batch_idx])
-            codes = self.model.quantizer.encode(
-                emb, self.model.frame_rate, self.model.bandwidth
-            )
-            codes = codes.transpose(0, 1)  # [B, K, T]
-            self.global_batch.zero_()
-            yield codes
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad():
+                emb = self.model.encoder(self.global_batch[:global_batch_idx])
+                codes = self.model.quantizer.encode(
+                    emb, self.model.frame_rate, self.model.bandwidth
+                )
+                codes = codes.transpose(0, 1)  # [B, K, T]
+                self.global_batch.zero_()
+                yield codes
 
     def __call__(self, read_q: Queue[torch.Tensor]):
         """
