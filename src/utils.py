@@ -18,7 +18,7 @@ def process_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     assert audio.shape[0] == 1, f"Audio needs to be mono, provided {audio.shape[0]} channels for {x}"
     assert audio.dim() == 2, f"Audio needs to be 2D tensor, provided {audio.dim()}D for {x}"
 
-    logger.debug(f"Processed audio file {x}, shape {audio.shape}")
+    logger.debug(f"Processed audio file {x}, shape {audio.shape}, length in seconds {audio.shape[1] / model_sample_rate}")
 
     return audio
 
@@ -35,3 +35,15 @@ def find_audio_files(folder):
 
     logger.info(f'Found {len(audio_files)} audio files in {folder}')
     return audio_files
+
+def find_files(folder, extensions):
+    tokens_files = []
+
+    # Walk through the directory and its subdirectories
+    for root, dirs, files in os.walk(folder):
+        for file in files:
+            if file.lower().endswith(extensions):
+                tokens_files.append(os.path.join(root, file))
+
+    logger.info(f'Found {len(tokens_files)} tokens files in {folder}')
+    return tokens_files

@@ -26,6 +26,22 @@ class TextDecoder:
         )
 
 class VoiceDecoder:
+    """
+    Wrapper over Encodec model to decode a list of audio files
+
+    >>> from src.decoder import VoiceDecoder
+    >>> voice_decoder = VoiceDecoder(
+    >>>    bandwidth=6.0,
+    >>>    single_segment_duration=2,
+    >>>    overlap=0.1,
+    >>>    device='cuda'
+    >>> )
+    >>> audio_files = Queue()
+    >>> ... # Add audio files to the queue
+    >>> decoded_audio = voice_decoder(read_q=audio_files)
+    >>> for idx, batch in enumerate(decoded_audio):
+    >>>     print(idx, batch.shape)
+    """
 
     def __init__(
             self,
@@ -46,16 +62,19 @@ class VoiceDecoder:
         self.cutoff = int(self.model.sample_rate * self.overlap)
 
         if device != 'cpu':
+            self.model = self.model.to(device)
+
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+            # set matmul precision to use either bfloat16 or tf32
+            torch.set_float32_matmul_precision("medium")
+            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-            self.model = self.model.to(device)
-            self.model = torch.compile(self.model)
+            self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
             input = torch.randn(1, 1, self.segment_length, device=device)
-            for _ in range(50):
+            for _ in range(5):
                 self.model(input)
 
     def __call__(self, read_q: Queue[torch.Tensor]):
@@ -66,7 +85,7 @@ class VoiceDecoder:
         representing the encoded audio files
         """
         while not read_q.empty():
-            tokens_batch = read_q.get() #B, K, T
+            tokens_batch = read_q.get() # B, K, T
             logger.info(f'Processing tensors of shape {tokens_batch.shape}')
 
             # Decode the complete batch and then join
@@ -77,7 +96,8 @@ class VoiceDecoder:
                 out = self.model.decoder(out) # B, 1, L
                 logger.info(f'Output shape: {out.shape}')
                 # Remove the overlap introduced by the encoder
-                out = out[:, :, :-self.cutoff]
+                if self.cutoff > 0:
+                    out = out[:, :, :-self.cutoff]
                 logger.info(f'Transformed output shape: {out.shape}')
                 yield out.reshape(-1, )
 
