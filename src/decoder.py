@@ -6,8 +6,7 @@ from typing import List
 from queue import Queue
 from encodec import EncodecModel
 
-logger.remove()
-logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="DEBUG")
+logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
 
 class TextDecoder:

@@ -51,3 +51,7 @@ We implement `encodec` with batching. There are two ways to implement batching
 2. [Fixed batching] Take a batch of audio files, split each audio file into smaller chunks and pass the batch of the chunk to the model. This will lead to minimum wastage of resources and ensure that you don't get OOM errors
 
 We tested both the implementations on CPU and GPU using the [librispeech](https://www.openslr.org/12/) `test-clean` dataset which is 5.4 hours long. For our setup, we noticed the following metrics:
+
+## Datasets
+
+1. https://huggingface.co/blog/audio-datasets#streaming-mode-the-silver-bullet

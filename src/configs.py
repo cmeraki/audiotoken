@@ -8,7 +8,7 @@ class VoiceEncoderConfig:
     bandwidth: float = 12
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 64
+    batch_size: int = 128
 
 @dataclass
 class VoiceDecoderConfig(VoiceEncoderConfig):

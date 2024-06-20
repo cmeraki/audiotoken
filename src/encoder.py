@@ -9,7 +9,6 @@ from encodec import EncodecModel
 from .utils import process_audio
 from .configs import AudioConfig
 
-logger.remove()
 logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
 class TextEncoder:
@@ -217,7 +216,7 @@ if __name__ == '__main__':
 
     result = []
     for idx, batch in enumerate(encoded_audio):
-        print(idx, batch.shape)
+        print(idx, batch)
         result.append(batch)
 
     print(f'Encoding took {time() - start_time:.2f}s')
