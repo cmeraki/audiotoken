@@ -98,7 +98,6 @@ class VoiceDecoder:
                 # Remove the overlap introduced by the encoder
                 if self.cutoff > 0:
                     out = out[:, :, :-self.cutoff]
-                logger.info(f'Transformed output shape: {out.shape}')
                 yield out.reshape(-1, )
 
 

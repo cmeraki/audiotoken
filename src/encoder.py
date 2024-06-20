@@ -7,6 +7,7 @@ from queue import Queue
 from encodec import EncodecModel
 
 from .utils import process_audio
+from .configs import AudioConfig
 
 logger.remove()
 logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
@@ -108,6 +109,7 @@ class VoiceEncoder:
                 codes = self.model.quantizer.encode(
                     emb, self.model.frame_rate, self.model.bandwidth
                 )
+                # TODO: Add cutoff support
                 codes = codes.transpose(0, 1)  # [B, K, T]
                 self.global_batch.zero_()
                 return codes
@@ -124,8 +126,9 @@ class VoiceEncoder:
 
         # Have a global batch size
         while not read_q.empty():
-            local_sample, local_filename = read_q.get()
+            local_sample, local_config = read_q.get()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            # local_config: AudioConfig
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
 
@@ -134,9 +137,9 @@ class VoiceEncoder:
             if local_batch_idx + global_batch_idx > self.batch_size:
                 logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
 
-                start_idx = global_batch_idx
-                end_idx = self.batch_size
-                file_pointers.append((local_filename, start_idx, end_idx))
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = self.batch_size
+                file_pointers.append(local_config)
 
                 # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
                 self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
@@ -144,9 +147,9 @@ class VoiceEncoder:
                 yield (self.encode_global_batch(self.batch_size), file_pointers)
 
                 file_pointers = []
-                start_idx = 0
-                end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-                file_pointers.append((local_filename, start_idx, end_idx))
+                local_config.start_idx = 0
+                local_config.end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
+                file_pointers.append(local_config)
 
                 # Flush the reamining local batch to the global batch
                 self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
@@ -158,9 +161,9 @@ class VoiceEncoder:
             if local_batch_idx + global_batch_idx < self.batch_size:
                 logger.debug(f'Adding to global batch. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
 
-                start_idx = global_batch_idx
-                end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append((local_filename, start_idx, end_idx))
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = global_batch_idx + local_batch_idx
+                file_pointers.append(local_config)
 
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
                 global_batch_idx += local_batch_idx
@@ -171,9 +174,9 @@ class VoiceEncoder:
             if local_batch_idx + global_batch_idx == self.batch_size:
                 logger.debug(f'Global batch is full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
 
-                start_idx = global_batch_idx
-                end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append((local_filename, start_idx, end_idx))
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = global_batch_idx + local_batch_idx
+                file_pointers.append(local_config)
 
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
 

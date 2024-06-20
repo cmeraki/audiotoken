@@ -4,10 +4,10 @@ from tqdm import tqdm
 from queue import Queue
 from torch.utils.data import DataLoader
 
-from .encoder import VoiceEncoder
-from .configs import VoiceEncoderConfig
-from .utils import find_audio_files
-from .datasets import AudioDataset
+from ..src.encoder import VoiceEncoder
+from ..src.configs import VoiceEncoderConfig
+from ..src.utils import find_audio_files
+from ..src.datasets import AudioDataset
 
 DEVICE = 'cuda:0'
 START_TOKEN = 0
