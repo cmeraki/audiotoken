@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import numpy as np
 import torchaudio
 import numpy as np
 from encodec.utils import convert_audio
@@ -72,3 +73,4 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
 
     except Exception as e:
         print(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
+
