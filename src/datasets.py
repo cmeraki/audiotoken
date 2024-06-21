@@ -1,52 +1,12 @@
-import uuid
-import numpy as np
+import os
+import torch
 from typing import List
+from datasets import load_dataset
 from torch.utils.data import Dataset
+from encodec.utils import convert_audio
 
+from .configs import AudioConfig
 from .utils import process_audio
-
-class NumpyDataset:
-    def __init__(
-        self,
-        dir,
-        samples_per_file=None,
-        dtype=None
-    ):
-
-        self.dir = dir
-        self.samples_per_file = samples_per_file
-        self.dtype = dtype
-
-        self.index = 0
-        self.array = None
-
-    def new_array(self):
-        self.index = 0
-        self.array = np.zeros(self.samples_per_file, dtype=self.dtype)
-
-    def flush(self):
-        if self.array is None:
-            return
-
-        self.array = self.array[:self.index]
-        file_prefix = str(uuid.uuid4())
-        file_path = f"{self.dir}/{file_prefix}.npy"
-        np.save(file_path, self.array)
-
-    def write(self, samples):
-        if self.array is None:
-            self.new_array()
-
-        if len(samples) + self.index > self.samples_per_file:
-            self.flush()
-            self.new_array()
-
-        self.array[self.index:self.index + len(samples)] = samples
-        self.index += len(samples)
-
-    def close(self):
-        self.flush()
-
 
 class AudioDataset(Dataset):
     def __init__(self, audio_files: List[str], sample_rate: float, channels: int):
@@ -60,22 +20,42 @@ class AudioDataset(Dataset):
     def __getitem__(self, idx):
         audio_path = self.audio_files[idx]
         waveform = process_audio(audio_path, self.sample_rate)
-        return waveform
+        audio_config = AudioConfig(
+            file_name=audio_path,
+            length_seconds=waveform.shape[-1] / self.sample_rate,
+            length_samples=waveform.shape[-1]
+        )
 
-if __name__ == '__main__':
+        return waveform, audio_config
 
-    ds = NumpyDataset(
-        dir='test_mmap_ds/',
-        samples_per_file=1000000,
-        dtype=np.int32
-    )
 
-    total_samples = 0
+class GigaSpeechDataset(Dataset):
+    def __init__(self, sample_rate: int, size: str = "m", split: str = "train"):
+        assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
 
-    for i in range(100000):
-        x = np.random.randn(np.random.randint(10, 100))
-        total_samples += len(x)
-        ds.write(x)
+        self.dataset = load_dataset(
+            "speechcolab/gigaspeech",
+            size,
+            trust_remote_code=True,
+            token=os.environ.get("HF_TOKEN"),
+            # streaming=True
+        )[split]
+        self.sample_rate = sample_rate
 
-    ds.close()
-    print(total_samples)
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        ds_idx = self.dataset[idx]
+        audio_input = torch.Tensor(ds_idx["audio"]["array"].reshape(1, -1))
+        sr = ds_idx["audio"]["sampling_rate"]
+
+        waveform = convert_audio(audio_input, sr, self.sample_rate, 1)
+
+        audio_config = AudioConfig(
+            file_name=ds_idx["audio"]["path"],
+            length_seconds=waveform.shape[-1] / self.sample_rate,
+            length_samples=waveform.shape[-1]
+        )
+
+        return waveform, audio_config

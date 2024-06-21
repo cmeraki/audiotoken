@@ -7,8 +7,8 @@ from queue import Queue
 from encodec import EncodecModel
 
 from .utils import process_audio
+from .configs import AudioConfig
 
-logger.remove()
 logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
 class TextEncoder:
@@ -30,11 +30,19 @@ class VoiceEncoder:
     """
     Wrapper over Encodec model to encode a list of audio files.
 
-    The input is a list of tensors which are batched in two ways:
-    1. First the audio is batched to a local batch
-    2. Then it is added to a global batch
-    3. We finally process the global batch once it is full
-    4. This way, we have uniform batch sizes for the model
+    >>> from src.encoder import VoiceEncoder
+    >>> voice_encoder = VoiceEncoder(
+    >>>    bandwidth=6.0,
+    >>>    single_segment_duration=2,
+    >>>    batch_size=100,
+    >>>    overlap=0.1,
+    >>>    device='cuda'
+    >>> )
+    >>> audio_files = Queue()
+    >>> ... # Add audio files to the queue
+    >>> encoded_audio = voice_encoder(read_q=audio_files)
+    >>> for idx, batch in enumerate(encoded_audio):
+    >>>     print(idx, batch.shape)
     """
 
     def __init__(
@@ -58,6 +66,9 @@ class VoiceEncoder:
         self.stride = int(self.segment_length - self.overlap * self.model.sample_rate)
         self.batch_size = batch_size
 
+        # Overlap introduced in the tokens
+        self.cutoff = int(75 * self.overlap)
+
         self.global_batch = torch.zeros(self.batch_size, 1, self.segment_length, device=self.device)
 
         self.model.eval()
@@ -68,24 +79,20 @@ class VoiceEncoder:
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
             torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
-            torch.backends.cudnn.benchmark = True  # Selects the best conv algo
+            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
             input = torch.randn(1, 1, self.segment_length, device=device)
-            for _ in range(50):
+            for _ in range(5):
                 self.model(input)
 
     def prepare_batch(self, audio: torch.Tensor):
-        logger.info('Preparing batch process started')
-
         _, length = audio.shape
         segments = []
 
         for i in range(0, length, self.stride):
-            logger.debug(f'Processing segment {i} to {i+self.segment_length}')
-
             segment = audio[:, i:i+self.segment_length]
             if segment.shape[1] < self.segment_length:
                 segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[1]), value=0)
@@ -101,9 +108,10 @@ class VoiceEncoder:
                 codes = self.model.quantizer.encode(
                     emb, self.model.frame_rate, self.model.bandwidth
                 )
+                # TODO: Add cutoff support
                 codes = codes.transpose(0, 1)  # [B, K, T]
                 self.global_batch.zero_()
-                yield codes
+                return codes
 
     def __call__(self, read_q: Queue[torch.Tensor]):
         """
@@ -113,11 +121,13 @@ class VoiceEncoder:
         representing the encoded audio files
         """
         global_batch_idx = 0
+        file_pointers = []
 
         # Have a global batch size
         while not read_q.empty():
-            local_sample = read_q.get()
+            local_sample, local_config = read_q.get()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            # local_config: AudioConfig
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
 
@@ -125,30 +135,58 @@ class VoiceEncoder:
             # process one part that fits in the global batch now and the rest later
             if local_batch_idx + global_batch_idx > self.batch_size:
                 logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
+
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = self.batch_size
+                file_pointers.append(local_config)
+
+                # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
                 self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
-                yield from self.encode_global_batch(self.batch_size)
+
+                yield (self.encode_global_batch(self.batch_size), file_pointers)
+
+                file_pointers = []
+                local_config.start_idx = 0
+                local_config.end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
+                file_pointers.append(local_config)
+
                 # Flush the reamining local batch to the global batch
                 self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
                 global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
+
                 continue
 
             # If we get a local batch that does not fill the global batch, we can add it to the global batch
             if local_batch_idx + global_batch_idx < self.batch_size:
                 logger.debug(f'Adding to global batch. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
+
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = global_batch_idx + local_batch_idx
+                file_pointers.append(local_config)
+
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
                 global_batch_idx += local_batch_idx
+
                 continue
 
             # If the local batch fills the global batch, we can yield the encoding of the global batch
             if local_batch_idx + global_batch_idx == self.batch_size:
                 logger.debug(f'Global batch is full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
+
+                local_config.start_idx = global_batch_idx
+                local_config.end_idx = global_batch_idx + local_batch_idx
+                file_pointers.append(local_config)
+
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-                yield from self.encode_global_batch(self.batch_size)
+
+                yield (self.encode_global_batch(self.batch_size), file_pointers)
+
+                file_pointers = []
                 global_batch_idx = 0
 
         if global_batch_idx > 0:
             logger.debug(f'Global batch is not full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-            yield from self.encode_global_batch(global_batch_idx)
+            yield (self.encode_global_batch(global_batch_idx), file_pointers)
 
 if __name__ == '__main__':
     import os
@@ -178,7 +216,7 @@ if __name__ == '__main__':
 
     result = []
     for idx, batch in enumerate(encoded_audio):
-        print(idx, batch.shape)
+        print(idx, batch)
         result.append(batch)
 
     print(f'Encoding took {time() - start_time:.2f}s')
