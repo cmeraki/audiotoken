@@ -23,7 +23,8 @@ class AudioDataset(Dataset):
         audio_config = AudioConfig(
             file_name=audio_path,
             length_seconds=waveform.shape[-1] / self.sample_rate,
-            length_samples=waveform.shape[-1]
+            length_samples=waveform.shape[-1],
+            length_tokens=50
         )
 
         return waveform, audio_config

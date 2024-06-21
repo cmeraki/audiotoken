@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 
-from .encoder import VoiceEncoder
-from .configs import VoiceEncoderConfig
+from .encoder import VoiceEncoder, HubertEncoder
+from .configs import VoiceEncoderConfig, HubertEncoderConfig
 from .utils import find_audio_files, save_audio_tokens
 from .datasets import AudioDataset, GigaSpeechDataset
 
@@ -34,9 +34,9 @@ def encode(voice_encoder, dataset, batch_size, outdir):
 
     with ThreadPoolExecutor() as executor:
         for batch in tqdm(dataloader_batched, total=len(dataloader_batched)):
-            audio_q = Queue()
+            audio_q = []
             for waveform, audio_config in batch:
-                audio_q.put((waveform, audio_config))
+                audio_q.append((waveform, audio_config))
 
             encoded_audio = voice_encoder(audio_q)
             for tokens_batch, file_pointers in encoded_audio:
@@ -60,12 +60,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    voice_encoder = VoiceEncoder(
-        bandwidth=VoiceEncoderConfig.bandwidth,
-        single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        batch_size=VoiceEncoderConfig.batch_size,
-        overlap=VoiceEncoderConfig.overlap,
-        device=DEVICE,
+    # voice_encoder = VoiceEncoder(
+    #     bandwidth=VoiceEncoderConfig.bandwidth,
+    #     single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+    #     batch_size=VoiceEncoderConfig.batch_size,
+    #     overlap=VoiceEncoderConfig.overlap,
+    #     device=DEVICE,
+    # )
+
+    voice_encoder = HubertEncoder(
+         config=HubertEncoderConfig(),
+         device=DEVICE
     )
 
     if os.path.isdir(args.indir):
@@ -77,17 +82,17 @@ if __name__ == '__main__':
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # dataset = AudioDataset(
-    #     files,
-    #     sample_rate=VoiceEncoderConfig.model_sample_rate,
-    #     channels=1
-    # )
-
-    dataset = GigaSpeechDataset(
-        sample_rate=VoiceEncoderConfig.model_sample_rate,
-        size="m",
-        split="train"
+    dataset = AudioDataset(
+        files,
+        sample_rate=16000,
+        channels=1
     )
+
+    # dataset = GigaSpeechDataset(
+    #     sample_rate=VoiceEncoderConfig.model_sample_rate,
+    #     size="m",
+    #     split="train"
+    # )
 
     encode(
         voice_encoder=voice_encoder,
