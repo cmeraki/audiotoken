@@ -86,7 +86,7 @@ if __name__ == '__main__':
     dataset = GigaSpeechDataset(
         sample_rate=VoiceEncoderConfig.model_sample_rate,
         size="m",
-        split="train"
+        split="test"
     )
 
     encode(

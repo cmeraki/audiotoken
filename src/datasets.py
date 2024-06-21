@@ -30,7 +30,7 @@ class AudioDataset(Dataset):
 
 
 class GigaSpeechDataset(Dataset):
-    def __init__(self, sample_rate: int, size: str = "m", split: str = "train"):
+    def __init__(self, sample_rate: int, size: str = "s", split: str = "train"):
         assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
 
         self.dataset = load_dataset(
@@ -50,12 +50,17 @@ class GigaSpeechDataset(Dataset):
         audio_input = torch.Tensor(ds_idx["audio"]["array"].reshape(1, -1))
         sr = ds_idx["audio"]["sampling_rate"]
 
-        waveform = convert_audio(audio_input, sr, self.sample_rate, 1)
+        try:
+            waveform = convert_audio(audio_input, sr, self.sample_rate, 1)
 
-        audio_config = AudioConfig(
-            file_name=ds_idx["audio"]["path"],
-            length_seconds=waveform.shape[-1] / self.sample_rate,
-            length_samples=waveform.shape[-1]
-        )
+            audio_config = AudioConfig(
+                file_name=ds_idx["audio"]["path"],
+                length_seconds=waveform.shape[-1] / self.sample_rate,
+                length_samples=waveform.shape[-1]
+            )
 
-        return waveform, audio_config
+            return waveform, audio_config
+
+        except Exception as e:
+            print(f"Error converting audio: {e}")
+            return None, None
