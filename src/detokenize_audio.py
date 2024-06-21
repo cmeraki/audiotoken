@@ -1,5 +1,9 @@
 import os
 import torch
+<<<<<<< HEAD
+import numpy as np
+=======
+>>>>>>> a083807048b02c7cd8b33aa1d45377a3c7286b55
 from queue import Queue
 
 from encodec.utils import save_audio
@@ -29,7 +33,7 @@ if __name__ == '__main__':
     )
 
     if os.path.isdir(args.indir):
-        audio_tokens = find_files(args.indir, ('.pt'))
+        audio_tokens = find_files(args.indir, ('.npy'))
 
     else:
         audio_tokens = [args.indir]
@@ -39,13 +43,15 @@ if __name__ == '__main__':
     for idx, a in enumerate(audio_tokens):
         encoded_audio_q: Queue[torch.Tensor] = Queue()
 
-        tokens = torch.load(a).unsqueeze(0)
+        tokens = np.load(a)
+        tokens = torch.tensor(tokens, device=args.device).unsqueeze(0)
+
         encoded_audio_q.put(tokens)
 
         decoder = voice_decoder(encoded_audio_q)
         decoded_audio = next(iter(decoder))
 
-        save_filename = a.split('/')[-1].replace('.pt', '.wav')
+        save_filename = a.split('/')[-1].replace('.npy', '.wav')
         temp = decoded_audio.detach().cpu().unsqueeze(0)
 
         print(f'Decoded audio shape: {idx}\t{temp.shape}, {save_filename}')
