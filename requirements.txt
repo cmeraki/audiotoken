@@ -1,6 +1,5 @@
 torch==2.3.1
-torchaudio==2.3.1+cu121
-vllm==0.4.3
+torchaudio==2.3.1
 tiktoken==0.7.0
 encodec==0.1.1
 typing
@@ -10,5 +9,6 @@ soundfile==0.12.1
 librosa==0.10.2.post1
 packaging==24.0
 ninja==1.11.1.1
-# flash-attn
 scikit-learn==1.5.0
+flash-attn==2.1.0
+# vllm==0.4.3

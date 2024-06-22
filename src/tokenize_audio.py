@@ -3,14 +3,16 @@ import time
 import torch
 from tqdm import tqdm
 from queue import Queue
+from functools import partial
 from pathlib import Path
 from torch.utils.data import DataLoader
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
+from transformers import Wav2Vec2FeatureExtractor
 
 from .encoder import VoiceEncoder, HubertEncoder
 from .configs import VoiceEncoderConfig, HubertEncoderConfig
-from .utils import find_audio_files, save_audio_tokens
+from .utils import find_audio_files, save_audio_tokens, preprocess_audio
 from .datasets import AudioDataset, GigaSpeechDataset
 
 logger.remove()
@@ -41,7 +43,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
             encoded_audio = voice_encoder(audio_q)
             for tokens_batch, file_pointers in encoded_audio:
                 for fp in file_pointers:
-                        executor.submit(save_audio_tokens, tokens_batch, fp, outdir)
+                     executor.submit(save_audio_tokens, tokens_batch, fp, outdir)
 
     print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
 
@@ -50,6 +52,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert'], type=str, required=True, help='Encoder to run.')
     parser.add_argument('--indir', type=str, required=True, help='Input directory or filename for audio files.')
     parser.add_argument('--outdir', type=str, required=True, help='Output directory for encoded audio.')
     parser.add_argument('--batch_size', type=int, default=2, help='Batch size for encoding.')
@@ -60,33 +63,45 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    # voice_encoder = VoiceEncoder(
-    #     bandwidth=VoiceEncoderConfig.bandwidth,
-    #     single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-    #     batch_size=VoiceEncoderConfig.batch_size,
-    #     overlap=VoiceEncoderConfig.overlap,
-    #     device=DEVICE,
-    # )
-
-    voice_encoder = HubertEncoder(
-         config=HubertEncoderConfig(),
-         device=DEVICE
-    )
-
     if os.path.isdir(args.indir):
         files = find_audio_files(args.indir)
 
     else:
         files = [args.indir]
 
+    if args.tokenizer == 'encodec':
+        encoder = VoiceEncoder(
+            bandwidth=VoiceEncoderConfig.bandwidth,
+            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+            batch_size=VoiceEncoderConfig.batch_size,
+            overlap=VoiceEncoderConfig.overlap,
+            device=DEVICE,
+        )
+
+        dataset = AudioDataset(
+            files,
+            sample_rate=VoiceEncoderConfig.model_sample_rate,
+            channels=1,
+        )
+
+    elif args.tokenizer == 'hubert':
+        encoder = HubertEncoder(device=DEVICE) # type: ignore
+
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+
+        tranform_func = partial(
+            preprocess_audio, sample_rate=HubertEncoderConfig.audio_sample_rate, processor=processor
+        )
+        dataset = AudioDataset(
+            files,
+            sample_rate=HubertEncoderConfig.audio_sample_rate,
+            channels=1,
+            transform=tranform_func
+        )
+
+
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    dataset = AudioDataset(
-        files,
-        sample_rate=16000,
-        channels=1
-    )
 
     # dataset = GigaSpeechDataset(
     #     sample_rate=VoiceEncoderConfig.model_sample_rate,
@@ -95,7 +110,7 @@ if __name__ == '__main__':
     # )
 
     encode(
-        voice_encoder=voice_encoder,
+        voice_encoder=encoder,
         dataset=dataset,
         batch_size=args.batch_size,
         outdir=outdir

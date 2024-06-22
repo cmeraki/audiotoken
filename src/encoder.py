@@ -1,20 +1,19 @@
-import pdb
 import sys
 import torch
-import torchaudio
 import tiktoken
 import joblib
+
 from loguru import logger
-from typing import List
 from queue import Queue
+from typing import List, Tuple
 from encodec import EncodecModel
 from huggingface_hub import hf_hub_download
 from transformers import HubertModel, Wav2Vec2FeatureExtractor
 
-from .utils import process_audio
-from .configs import HubertEncoderConfig, AudioConfig
+from .utils import read_audio, preprocess_audio
+from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig
 
-logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
+logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="INFO")
 
 class TextEncoder:
     """
@@ -56,12 +55,14 @@ class VoiceEncoder:
             single_segment_duration: int,
             overlap: float = 0.1,
             batch_size: int = 100,
+            config: VoiceEncoderConfig = VoiceEncoderConfig(),
             device: str = 'cpu'
         ):
 
         self.model = EncodecModel.encodec_model_24khz()
         self.model.set_target_bandwidth(bandwidth)
         self.device = torch.device(device)
+        self.config = config
         self.pad_token = 0
         self.eos_token = -1
 
@@ -132,6 +133,7 @@ class VoiceEncoder:
         while not read_q.empty():
             local_sample, local_config = read_q.get()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            local_config.length_tokens = self.config.token_length
             # local_config: AudioConfig
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
@@ -197,7 +199,7 @@ class VoiceEncoder:
 class HubertEncoder:
     def __init__(
         self,
-        config: HubertEncoderConfig,
+        config: HubertEncoderConfig=HubertEncoderConfig(),
         device: str = 'cpu'
     ):
 
@@ -208,30 +210,28 @@ class HubertEncoder:
         self.overlap = config.overlap
         self.stride = int(self.segment_length - self.overlap * self.audio_sample_rate)
         self.device = torch.device(device)
+        self.config = config
 
         self.pad_token = 0
         self.output_layer = 11
 
-        self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_id)
-        self.model = HubertModel.from_pretrained(model_id)
+        self.model = HubertModel.from_pretrained(model_id)#, attn_implementation="flash_attention_2")
         self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)
 
         if device != 'cpu':
-            self.model = self.model.to(self.device)
+            self.model.to(self.device)
 
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
             torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
             # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-            self.model = torch.compile(self.model, mode="reduce-overhead")
+            self.model = torch.compile(self.model)#, mode="reduce-overhead")
 
             # warmup the model
             input = torch.randn((1, 16000), device=self.device)
             for _ in range(5):
-                i = self.processor(input, sampling_rate=self.audio_sample_rate, return_tensors='pt').input_values[0]
-                i = i.to(self.device)
-                _ = self.model(i, output_hidden_states=True).hidden_states
+                _ = self.model(input, output_hidden_states=True).hidden_states
 
         kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
         self.km = joblib.load(kmeans_path)
@@ -240,8 +240,6 @@ class HubertEncoder:
 
         self.C = torch.from_numpy(self.C_np).t().to(self.device)
         self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
-
-        # pdb.set_trace()
 
         del(self.C_np)
         del(self.Cnorm_np)
@@ -264,28 +262,23 @@ class HubertEncoder:
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
                 waveforms = self.global_batch[:global_batch_idx]
-                waveforms = self.processor(
-                    waveforms,
-                    sampling_rate=self.audio_sample_rate,
-                    return_tensors='pt'
-                ).input_values[0]
-                waveforms = waveforms.to(self.device)
-
-                embeddings = self.model(waveforms, output_hidden_states=True).hidden_states
+                embeddings = self.model.forward(waveforms, output_hidden_states=True).hidden_states
                 embeddings = embeddings[self.output_layer] # (B, T, D)
 
-                logger.info(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
+                logger.debug(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
                 distances = torch.sum(
-                    embeddings.unsqueeze(2) - self.C.unsqueeze(0).unsqueeze(0), dim=-1
+                    (embeddings.unsqueeze(2) - self.C.unsqueeze(0).unsqueeze(0))**2,
+                    dim=-1
                 )
                 distances = torch.sqrt(distances) # B, T, K
 
-                min_dist = torch.topk(distances, 1, dim=-1, largest=False)
-                greedy_output = min_dist.indices.T
+                min_dist = torch.topk(distances, 1, dim=-1, largest=False).indices # B, T, 1
 
-                return greedy_output
+                self.global_batch.zero_()
 
-    def __call__(self, read_q):
+                return min_dist.transpose(1, 2) # B, 1, T
+
+    def __call__(self, read_q: List[Tuple[torch.Tensor, AudioConfig]]):
         """
         Implements forward pass of the Encodec model
 
@@ -298,6 +291,7 @@ class HubertEncoder:
         # Have a global batch size
         while read_q:
             local_sample, local_config = read_q.pop()
+            local_config.length_tokens = self.config.token_length
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
@@ -321,14 +315,9 @@ class HubertEncoder:
                 local_config.end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
                 file_pointers.append(local_config)
 
-                try:
-                    # Flush the reamining local batch to the global batch
-                    self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
-                    global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-
-                except:
-                    import pdb
-                    pdb.set_trace()
+                # Flush the reamining local batch to the global batch
+                self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
+                global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
 
                 continue
 
@@ -365,63 +354,54 @@ class HubertEncoder:
             yield (self.encode_global_batch(global_batch_idx), file_pointers)
 
 if __name__ == '__main__':
-    import os
     from time import time
     from pathlib import Path
+    from argparse import ArgumentParser
     from .configs import VoiceEncoderConfig
 
-    audio_file_paths = ['~/Desktop/meraki/encodec/test_24k.wav']# * 10
-    # audio_files: Queue[torch.Tensor] = Queue()
+    parser = ArgumentParser(description='Encode audio files.')
+    parser.add_argument('--audio_file', type=str, required=True, help='Input filename for audio files.')
+    args = parser.parse_args()
+
+    audio_file_paths = [args.audio_file]
+    audio_files = Queue() # type: ignore
     save_path = './data/tokens_0.pt'
     device = 'cuda:0'
 
-    # for p in audio_file_paths:
-    #     audio_files.put(process_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate))
-
-    # voice_encoder = VoiceEncoder(
-    #     bandwidth=VoiceEncoderConfig.bandwidth,
-    #     single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-    #     batch_size=VoiceEncoderConfig.batch_size,
-    #     overlap=VoiceEncoderConfig.overlap,
-    #     device=device
-    # )
-
-    # start_time = time()
-    # encoded_audio = voice_encoder(read_q=audio_files)
-
-    # result = []
-    # for idx, batch in enumerate(encoded_audio):
-    #     print(idx, batch)
-    #     result.append(batch)
-
-    # print(f'Encoding took {time() - start_time:.2f}s')
-
-    # torch.save(
-    #     result,
-    #     os.path.abspath(save_path)
-    # )
-
-    # audio_files_n = []
-    # for p in audio_file_paths:
-    #     audio_files_n.append(process_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate).unsqueeze(0))
-
-    # start_time = time()
-
-    # batches = []
-    # for idx, batch in enumerate(audio_files_n):
-    #     batches.append(batch)
-
-    # tensor_batches = torch.vstack(batches).to(device)
-    # op = voice_encoder.model.encode(tensor_batches)
-
-    # print(f'Encoding took {time() - start_time:.2f}s')
-
-    audio_files = []
     for p in audio_file_paths:
-        a, sr = torchaudio.load(Path(p).expanduser())
-        audio_files.append((
+        a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
+        audio_files.put((
             a,
-            AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+            AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
+        ))
+
+    voice_encoder = VoiceEncoder(
+        bandwidth=VoiceEncoderConfig.bandwidth,
+        single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+        batch_size=VoiceEncoderConfig.batch_size,
+        overlap=VoiceEncoderConfig.overlap,
+        device=device
+    )
+
+    start_time = time()
+    encoded_audio = voice_encoder(read_q=audio_files)
+
+    result = []
+    for idx, batch in enumerate(encoded_audio):
+        print(idx, batch)
+        result.append(batch)
+
+    print(f'Encodec encoding took {time() - start_time:.2f}s')
+
+    audio_files_list = []
+    processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+
+    for p in audio_file_paths:
+        a = read_audio(Path(p).expanduser(), 16_000)
+        a = preprocess_audio(a, 16_000, processor)
+        audio_files_list.append((
+            a,
+            AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000)
         ))
 
     hubert_encoder = HubertEncoder(
@@ -430,9 +410,9 @@ if __name__ == '__main__':
     )
 
     start_time = time()
-    encoded_audio = hubert_encoder(audio_files)
+    encoded_audio = hubert_encoder(audio_files_list)
 
     for idx, batch in enumerate(encoded_audio):
         print(idx, batch, batch[0].shape)
 
-    print(f'Encoding took {time() - start_time:.2f}s')
+    print(f'Hubert encoding took {time() - start_time:.2f}s')

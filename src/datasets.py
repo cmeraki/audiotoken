@@ -6,26 +6,35 @@ from torch.utils.data import Dataset
 from encodec.utils import convert_audio
 
 from .configs import AudioConfig
-from .utils import process_audio
+from .utils import read_audio
 
 class AudioDataset(Dataset):
-    def __init__(self, audio_files: List[str], sample_rate: float, channels: int):
+    def __init__(
+            self,
+            audio_files: List[str],
+            sample_rate: float,
+            channels: int,
+            transform = None
+        ):
         self.audio_files = audio_files
         self.sample_rate = sample_rate
         self.channels = channels
+        self.transform = transform
 
     def __len__(self):
         return len(self.audio_files)
 
     def __getitem__(self, idx):
         audio_path = self.audio_files[idx]
-        waveform = process_audio(audio_path, self.sample_rate)
+        waveform = read_audio(audio_path, self.sample_rate)
         audio_config = AudioConfig(
             file_name=audio_path,
             length_seconds=waveform.shape[-1] / self.sample_rate,
             length_samples=waveform.shape[-1],
-            length_tokens=50
         )
+
+        if self.transform:
+            waveform = self.transform(waveform)
 
         return waveform, audio_config
 

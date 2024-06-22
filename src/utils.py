@@ -11,7 +11,7 @@ from .configs import AudioConfig
 
 logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
-def process_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
+def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
     Given an audio file, this function reads the audio file and returns the audio tensor
     suitable for processing by the model
@@ -74,3 +74,10 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
     except Exception as e:
         print(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
 
+def preprocess_audio(audio, sample_rate, processor):
+
+    return processor(
+        audio,
+        sampling_rate=sample_rate,
+        return_tensors='pt'
+    ).input_values[0]

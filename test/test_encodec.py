@@ -11,14 +11,14 @@ from torchmetrics.audio import ScaleInvariantSignalNoiseRatio
 
 from src.encoder import VoiceEncoder
 from src.decoder import VoiceDecoder
-from src.utils import process_audio
+from src.utils import read_audio
 from src.configs import VoiceEncoderConfig, VoiceDecoderConfig
 
 if __name__ == '__main__':
 
     audio_file_paths = ['~/Desktop/meraki/encodec/test_24k.wav']
     audio_files: Queue[torch.Tensor] = Queue()
-    audio_file = process_audio(
+    audio_file = read_audio(
         Path(audio_file_paths[0]).expanduser(),
         VoiceEncoderConfig.model_sample_rate
     )

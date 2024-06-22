@@ -1,9 +1,6 @@
 import os
 import torch
-<<<<<<< HEAD
 import numpy as np
-=======
->>>>>>> a083807048b02c7cd8b33aa1d45377a3c7286b55
 from queue import Queue
 
 from encodec.utils import save_audio
