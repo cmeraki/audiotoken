@@ -215,8 +215,8 @@ class HubertEncoder:
         self.pad_token = 0
         self.output_layer = 11
 
-        self.model = HubertModel.from_pretrained(model_id)#, attn_implementation="flash_attention_2")
-        self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)
+        self.model = HubertModel.from_pretrained(model_id, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
+        self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device, dtype=torch.float16)
 
         if device != 'cpu':
             self.model.to(self.device)
@@ -229,7 +229,7 @@ class HubertEncoder:
             self.model = torch.compile(self.model)#, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn((1, 16000), device=self.device)
+            input = torch.randn((1, 16000), device=self.device, dtype=torch.float16)
             for _ in range(5):
                 _ = self.model(input, output_hidden_states=True).hidden_states
 

@@ -40,7 +40,7 @@ class AudioDataset(Dataset):
 
 
 class GigaSpeechDataset(Dataset):
-    def __init__(self, sample_rate: int, size: str = "s", split: str = "train"):
+    def __init__(self, sample_rate: int, size: str, split: str, transform=None):
         assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
 
         self.dataset = load_dataset(
@@ -51,6 +51,7 @@ class GigaSpeechDataset(Dataset):
             # streaming=True
         )[split]
         self.sample_rate = sample_rate
+        self.transform = transform
 
     def __len__(self):
         return len(self.dataset)
@@ -68,6 +69,9 @@ class GigaSpeechDataset(Dataset):
                 length_seconds=waveform.shape[-1] / self.sample_rate,
                 length_samples=waveform.shape[-1]
             )
+
+            if self.transform:
+                waveform = self.transform(waveform)
 
             return waveform, audio_config
 

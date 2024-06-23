@@ -92,22 +92,23 @@ if __name__ == '__main__':
         tranform_func = partial(
             preprocess_audio, sample_rate=HubertEncoderConfig.audio_sample_rate, processor=processor
         )
-        dataset = AudioDataset(
-            files,
+        # dataset = AudioDataset(
+        #     files,
+        #     sample_rate=HubertEncoderConfig.audio_sample_rate,
+        #     channels=1,
+        #     transform=tranform_func
+        # )
+
+        dataset = GigaSpeechDataset( # type: ignore
             sample_rate=HubertEncoderConfig.audio_sample_rate,
-            channels=1,
+            size="m",
+            split="train",
             transform=tranform_func
         )
 
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    # dataset = GigaSpeechDataset(
-    #     sample_rate=VoiceEncoderConfig.model_sample_rate,
-    #     size="m",
-    #     split="train"
-    # )
 
     encode(
         voice_encoder=encoder,
