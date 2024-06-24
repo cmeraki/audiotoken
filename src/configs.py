@@ -21,7 +21,7 @@ class HubertEncoderConfig:
     audio_sample_rate: int = 16_000
     single_segment_duration: int = 15
     overlap: float = 0
-    batch_size: int = 8
+    batch_size: int = 4
     token_length: int = 50
 
 @dataclass

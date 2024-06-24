@@ -1,7 +1,7 @@
-import sys
 import torch
 import tiktoken
 import joblib
+import numpy as np
 
 from loguru import logger
 from queue import Queue
@@ -13,7 +13,7 @@ from transformers import HubertModel, Wav2Vec2FeatureExtractor
 from .utils import read_audio, preprocess_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig
 
-logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="INFO")
+logger.add('encoder.log', format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="DEBUG")
 
 class TextEncoder:
     """
@@ -215,8 +215,8 @@ class HubertEncoder:
         self.pad_token = 0
         self.output_layer = 11
 
-        self.model = HubertModel.from_pretrained(model_id, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
-        self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device, dtype=torch.float16)
+        self.model = HubertModel.from_pretrained(model_id)#,attn_implementation="flash_attention_2", torch_dtype=torch.float16)
+        self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
 
         if device != 'cpu':
             self.model.to(self.device)
@@ -229,7 +229,7 @@ class HubertEncoder:
             self.model = torch.compile(self.model)#, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn((1, 16000), device=self.device, dtype=torch.float16)
+            input = torch.randn((1, 16000), device=self.device)#, dtype=torch.float16)
             for _ in range(5):
                 _ = self.model(input, output_hidden_states=True).hidden_states
 
@@ -241,6 +241,8 @@ class HubertEncoder:
         self.C = torch.from_numpy(self.C_np).t().to(self.device)
         self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
 
+        self.C = self.C.unsqueeze(0).unsqueeze(0)  # (1, 1, K, D)
+
         del(self.C_np)
         del(self.Cnorm_np)
 
@@ -249,6 +251,7 @@ class HubertEncoder:
         _, length = audio.shape
         segments = []
 
+        logger.debug(f'Creating segments for audio of length {length}')
         for i in range(0, length, self.stride):
             segment = audio[0, i:i+self.segment_length]
             if segment.shape[0] < self.segment_length:
@@ -264,16 +267,19 @@ class HubertEncoder:
                 waveforms = self.global_batch[:global_batch_idx]
                 embeddings = self.model.forward(waveforms, output_hidden_states=True).hidden_states
                 embeddings = embeddings[self.output_layer] # (B, T, D)
+                embeddings = embeddings.unsqueeze(2)  # (B, T, 1, D)
 
                 logger.debug(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
-                distances = torch.sum(
-                    (embeddings.unsqueeze(2) - self.C.unsqueeze(0).unsqueeze(0))**2,
-                    dim=-1
-                )
-                distances = torch.sqrt(distances) # B, T, K
 
-                min_dist = torch.topk(distances, 1, dim=-1, largest=False).indices # B, T, 1
+                # Compute squared distances
+                distances = torch.sum((embeddings - self.C)**2, dim=-1)  # (B, T, K)
 
+                # Use in-place square root
+                distances.sqrt_()  # (B, T, K)
+
+                min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
+
+                logger.debug(f'Min dist size: {min_dist.shape}')
                 self.global_batch.zero_()
 
                 return min_dist.transpose(1, 2) # B, 1, T
@@ -365,7 +371,7 @@ if __name__ == '__main__':
 
     audio_file_paths = [args.audio_file]
     audio_files = Queue() # type: ignore
-    save_path = './data/tokens_0.pt'
+    save_path = './tmp/tokens_0.pt'
     device = 'cuda:0'
 
     for p in audio_file_paths:
@@ -390,6 +396,7 @@ if __name__ == '__main__':
     for idx, batch in enumerate(encoded_audio):
         print(idx, batch)
         result.append(batch)
+        np.save(save_path, batch[0].detach().cpu().numpy())
 
     print(f'Encodec encoding took {time() - start_time:.2f}s')
 

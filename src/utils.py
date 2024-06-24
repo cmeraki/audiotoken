@@ -9,7 +9,7 @@ from loguru import logger
 
 from .configs import AudioConfig
 
-logger.add(sys.stdout, format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
+logger.add('utils.log', format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """

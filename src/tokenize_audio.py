@@ -15,7 +15,7 @@ from .configs import VoiceEncoderConfig, HubertEncoderConfig
 from .utils import find_audio_files, save_audio_tokens, preprocess_audio
 from .datasets import AudioDataset, GigaSpeechDataset
 
-logger.remove()
+# logger.remove()
 
 def collate_fn_batched(batch):
     return batch
@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
         dataset = GigaSpeechDataset( # type: ignore
             sample_rate=HubertEncoderConfig.audio_sample_rate,
-            size="m",
+            size="xs",
             split="train",
             transform=tranform_func
         )
