@@ -19,7 +19,7 @@ class VoiceDecoderConfig(VoiceEncoderConfig):
 class HubertEncoderConfig:
     model_id: str = 'voidful/mhubert-base'
     audio_sample_rate: int = 16_000
-    single_segment_duration: int = 15
+    single_segment_duration: int = 10
     overlap: float = 0
     batch_size: int = 4
     token_length: int = 50
