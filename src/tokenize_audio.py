@@ -2,7 +2,6 @@ import os
 import time
 import torch
 from tqdm import tqdm
-from queue import Queue
 from functools import partial
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -18,7 +17,7 @@ from .datasets import AudioDataset, GigaSpeechDataset
 logger.remove()
 
 def collate_fn_batched(batch):
-    return batch
+    return [(waveform, audio_config) for waveform, audio_config in batch]
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -36,11 +35,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
 
     with ThreadPoolExecutor() as executor:
         for batch in tqdm(dataloader_batched, total=len(dataloader_batched)):
-            audio_q = Queue()
-            for waveform, audio_config in batch:
-                audio_q.put((waveform, audio_config))
-
-            encoded_audio = voice_encoder(audio_q)
+            encoded_audio = voice_encoder(batch)
             for tokens_batch, file_pointers in encoded_audio:
                 for fp in file_pointers:
                      executor.submit(save_audio_tokens, tokens_batch, fp, outdir)
@@ -49,6 +44,21 @@ def encode(voice_encoder, dataset, batch_size, outdir):
 
 
 if __name__ == '__main__':
+    """
+    python -m src.tokenize_audio \
+        --tokenizer encodec \
+        --indir /path/to/audio \
+        --outdir /path/to/output \
+        --batch_size 16 \
+        --device cuda:0
+
+    python -m src.tokenize_audio \
+        --tokenizer hubert \
+        --indir /path/to/audio \
+        --outdir /path/to/output \
+        --batch_size 16 \
+        --device cuda:0
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
@@ -98,6 +108,7 @@ if __name__ == '__main__':
         tranform_func = partial(
             preprocess_audio, sample_rate=HubertEncoderConfig.audio_sample_rate, processor=processor
         )
+
         # dataset = AudioDataset(
         #     files,
         #     sample_rate=HubertEncoderConfig.audio_sample_rate,

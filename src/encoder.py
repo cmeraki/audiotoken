@@ -4,7 +4,6 @@ import joblib
 import numpy as np
 
 from loguru import logger
-from queue import Queue
 from typing import List, Tuple
 from encodec import EncodecModel
 from huggingface_hub import hf_hub_download
@@ -42,8 +41,8 @@ class VoiceEncoder:
     >>>    overlap=0.1,
     >>>    device='cuda'
     >>> )
-    >>> audio_files = Queue()
-    >>> ... # Add audio files to the queue
+    >>> audio_files = []
+    >>> ... # Add audio files to the list
     >>> encoded_audio = voice_encoder(read_q=audio_files)
     >>> for idx, batch in enumerate(encoded_audio):
     >>>     print(idx, batch.shape)
@@ -119,7 +118,7 @@ class VoiceEncoder:
                 self.global_batch.zero_()
                 return codes
 
-    def __call__(self, read_q: Queue[torch.Tensor]):
+    def __call__(self, read_q: List[Tuple[torch.Tensor, AudioConfig]]):
         """
         Implements forward pass of the Encodec model
 
@@ -130,8 +129,8 @@ class VoiceEncoder:
         file_pointers = []
 
         # Have a global batch size
-        while not read_q.empty():
-            local_sample, local_config = read_q.get()
+        while read_q:
+            local_sample, local_config = read_q.pop()
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
             local_config.length_tokens = self.config.token_length
             # local_config: AudioConfig
@@ -219,6 +218,8 @@ class HubertEncoder:
         self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
         self.global_attention_mask = torch.ones(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
 
+        self.model.eval()
+
         if device != 'cpu':
             self.model.to(self.device)
 
@@ -272,8 +273,8 @@ class HubertEncoder:
                 waveforms = self.global_batch[:global_batch_idx]
                 attention_mask = self.global_attention_mask[:global_batch_idx]
 
-                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states
-                embeddings = embeddings[self.output_layer] # (B, T, D)
+                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer]
+                # embeddings = embeddings # (B, T, D)
                 embeddings = embeddings.unsqueeze(2)  # (B, T, 1, D)
 
                 logger.debug(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
@@ -383,13 +384,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     audio_file_paths = [args.audio_file]
-    audio_files = Queue() # type: ignore
+    audio_files = []
     save_path = './tmp/tokens_0.pt'
     device = 'cuda:0'
 
     for p in audio_file_paths:
         a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
-        audio_files.put((
+        audio_files.append((
             a,
             AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
         ))
@@ -413,13 +414,13 @@ if __name__ == '__main__':
 
     print(f'Encodec encoding took {time() - start_time:.2f}s')
 
-    audio_files_list = []
+    audio_files = []
     processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
     for p in audio_file_paths:
         a = read_audio(Path(p).expanduser(), 16_000)
         a = preprocess_audio(a, 16_000, processor)
-        audio_files_list.append((
+        audio_files.append((
             a,
             AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000)
         ))
@@ -430,7 +431,7 @@ if __name__ == '__main__':
     )
 
     start_time = time()
-    encoded_audio = hubert_encoder(audio_files_list)
+    encoded_audio = hubert_encoder(audio_files)
 
     for idx, batch in enumerate(encoded_audio):
         print(idx, batch, batch[0].shape)
