@@ -217,6 +217,7 @@ class HubertEncoder:
 
         self.model = HubertModel.from_pretrained(model_id)#,attn_implementation="flash_attention_2", torch_dtype=torch.float16)
         self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
+        self.global_attention_mask = torch.ones(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
 
         if device != 'cpu':
             self.model.to(self.device)
@@ -249,23 +250,29 @@ class HubertEncoder:
 
     def prepare_batch(self, audio: torch.Tensor):
         _, length = audio.shape
-        segments = []
+        segments, attention_mask = [], []
 
         logger.debug(f'Creating segments for audio of length {length}')
         for i in range(0, length, self.stride):
             segment = audio[0, i:i+self.segment_length]
+            local_attention_mask = [1] * len(segment)
+
             if segment.shape[0] < self.segment_length:
+                local_attention_mask += [0] * (self.segment_length - segment.shape[0])
                 segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[0]), value=0)
 
             segments.append(segment)
+            attention_mask.append(torch.Tensor(local_attention_mask))
 
-        return torch.vstack(segments), len(segments), # (B, T)
+        return torch.vstack(segments), torch.vstack(attention_mask).to(self.device), len(segments)  # (B, T)
 
     def encode_global_batch(self, global_batch_idx: int):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
                 waveforms = self.global_batch[:global_batch_idx]
-                embeddings = self.model.forward(waveforms, output_hidden_states=True).hidden_states
+                attention_mask = self.global_attention_mask[:global_batch_idx]
+
+                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states
                 embeddings = embeddings[self.output_layer] # (B, T, D)
                 embeddings = embeddings.unsqueeze(2)  # (B, T, 1, D)
 
@@ -298,7 +305,7 @@ class HubertEncoder:
         while read_q:
             local_sample, local_config = read_q.pop()
             local_config.length_tokens = self.config.token_length
-            local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
 
             logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
 
@@ -313,6 +320,7 @@ class HubertEncoder:
 
                 # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
                 self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
+                self.global_attention_mask[global_batch_idx:] = local_attention_mask[:self.batch_size-global_batch_idx]
 
                 yield (self.encode_global_batch(self.batch_size), file_pointers)
 
@@ -323,6 +331,8 @@ class HubertEncoder:
 
                 # Flush the reamining local batch to the global batch
                 self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
+                self.global_attention_mask[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_attention_mask[self.batch_size-global_batch_idx:]
+
                 global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
 
                 continue
@@ -336,6 +346,8 @@ class HubertEncoder:
                 file_pointers.append(local_config)
 
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
+                self.global_attention_mask[global_batch_idx:global_batch_idx+local_batch_idx] = local_attention_mask
+
                 global_batch_idx += local_batch_idx
 
                 continue
@@ -349,6 +361,7 @@ class HubertEncoder:
                 file_pointers.append(local_config)
 
                 self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
+                self.global_attention_mask[global_batch_idx:global_batch_idx+local_batch_idx] = local_attention_mask
 
                 yield (self.encode_global_batch(self.batch_size), file_pointers)
 
