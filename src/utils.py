@@ -5,11 +5,9 @@ import numpy as np
 import torchaudio
 import numpy as np
 from encodec.utils import convert_audio
-from loguru import logger
 
 from .configs import AudioConfig
-
-logger.add('utils.log', format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
+from .logger import logger
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
@@ -70,6 +68,8 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
 
         else:
             np.save(save_path, tokens_to_save[:, :tokens_len])
+
+        logger.info(f"Saved tokens for {audio_pointer.file_name} to {save_path}")
 
     except Exception as e:
         print(f'Error saving tokens for {audio_pointer.file_name} with error {e}')

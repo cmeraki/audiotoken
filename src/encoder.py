@@ -3,7 +3,6 @@ import tiktoken
 import joblib
 import numpy as np
 
-from loguru import logger
 from typing import List, Tuple
 from encodec import EncodecModel
 from huggingface_hub import hf_hub_download
@@ -11,8 +10,7 @@ from transformers import HubertModel, Wav2Vec2FeatureExtractor
 
 from .utils import read_audio, preprocess_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig
-
-logger.add('encoder.log', format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="DEBUG")
+from .logger import logger
 
 class TextEncoder:
     """
@@ -243,8 +241,6 @@ class HubertEncoder:
         self.C = torch.from_numpy(self.C_np).t().to(self.device)
         self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
 
-        self.C = self.C.unsqueeze(0).unsqueeze(0)  # (1, 1, K, D)
-
         del(self.C_np)
         del(self.Cnorm_np)
 
@@ -265,7 +261,7 @@ class HubertEncoder:
             segments.append(segment)
             attention_mask.append(torch.Tensor(local_attention_mask))
 
-        return torch.vstack(segments), torch.vstack(attention_mask).to(self.device), len(segments)  # (B, T)
+        return torch.vstack(segments), torch.vstack(attention_mask), len(segments)  # (B, T)
 
     def encode_global_batch(self, global_batch_idx: int):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -273,18 +269,12 @@ class HubertEncoder:
                 waveforms = self.global_batch[:global_batch_idx]
                 attention_mask = self.global_attention_mask[:global_batch_idx]
 
-                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer]
-                # embeddings = embeddings # (B, T, D)
-                embeddings = embeddings.unsqueeze(2)  # (B, T, 1, D)
+                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
 
                 logger.debug(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
 
-                # Compute squared distances
-                distances = torch.sum((embeddings - self.C)**2, dim=-1)  # (B, T, K)
-
-                # Use in-place square root
-                distances.sqrt_()  # (B, T, K)
-
+                # Compute L2 norm
+                distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                 min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
 
                 logger.debug(f'Min dist size: {min_dist.shape}')

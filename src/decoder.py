@@ -1,13 +1,10 @@
-import sys
 import torch
 import tiktoken
-from loguru import logger
 from typing import List
 from queue import Queue
 from encodec import EncodecModel
 
-logger.add('decoder.log', format="[{time: YYYY-MM-DD HH:mm:ss} {level}] {message}", level="ERROR")
-
+from src.logger import logger
 
 class TextDecoder:
     """
