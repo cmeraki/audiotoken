@@ -296,9 +296,10 @@ class HubertEncoder:
         while read_q:
             local_sample, local_config = read_q.pop()
             local_config.length_tokens = self.config.token_length
-            local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
 
-            logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
+            logger.debug(f'Processing started for local config {local_config}')
+
+            local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
 
             # If we get a local batch that is larger than the global batch size, we need to split it
             # process one part that fits in the global batch now and the rest later

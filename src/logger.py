@@ -22,7 +22,7 @@ def get_logger(log_file="app.log"):
 
     log_file = os.path.join("logs", log_file)
 
-    format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {message} | {thread.id} | {process.name}"
+    format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {process.name} | {thread.id} | {level: <8} | {file}:{line} | {message}"
 
     logger.add(
         log_file,

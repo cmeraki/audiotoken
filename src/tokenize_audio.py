@@ -19,7 +19,7 @@ def collate_fn_batched(batch):
     return [(waveform, audio_config) for waveform, audio_config in batch]
 
 @torch.inference_mode()
-def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 8):
+def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 1):
 
     def save_audio_tokens_worker(output_queue, outdir):
         while True:
@@ -54,10 +54,12 @@ def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 8)
     for idx, batch in tqdm(enumerate(dataloader_batched), total=len(dataloader_batched)):
         encoded_audio = voice_encoder(batch)
         logger.info(f'Processing batch {idx}')
-        for tokens_batch, file_pointers in encoded_audio:
-            logger.info(f"Processed batch of {len(file_pointers)}")
+        for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
+            logger.debug(f"Processed iteration {jdx}, batch: {idx}")
             for fp in file_pointers:
-                output_queue.put((tokens_batch.detach().cpu(), fp))
+                output_queue.put((tokens_batch.cpu(), fp))
+            logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
+        logger.info(f"Processed batch {idx}")
 
     for _ in range(num_writer_processes):
         output_queue.put(None)
