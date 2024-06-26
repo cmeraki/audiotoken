@@ -1,13 +1,12 @@
 import os
 import time
 import torch
-import psutil
 from tqdm import tqdm
 from functools import partial
 from pathlib import Path
 from torch.utils.data import DataLoader
+from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
-import multiprocessing as mp
 from transformers import Wav2Vec2FeatureExtractor
 
 from .encoder import VoiceEncoder, HubertEncoder
@@ -19,29 +18,8 @@ from .logger import logger
 def collate_fn_batched(batch):
     return [(waveform, audio_config) for waveform, audio_config in batch]
 
-
-def save_audio_tokens_worker(output_queue, outdir):
-    while True:
-        item = output_queue.get()
-        if item is None:  # Signal to end the process
-            break
-        tokens_batch, fp = item
-        save_audio_tokens(tokens_batch, fp, outdir)
-
-
 @torch.inference_mode()
-def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 4):
-
-    writer_processes = []
-    output_queue: mp.Queue = mp.Queue() # type: ignore
-
-    for _ in range(num_writer_processes):
-        p = mp.Process(
-            target=save_audio_tokens_worker,
-            args=(output_queue, outdir))
-        p.start()
-        writer_processes.append(p)
-
+def encode(voice_encoder, dataset, batch_size, outdir):
     dataloader_batched = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -54,26 +32,17 @@ def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 4)
 
     start_time = time.time()
 
-    for idx, batch in tqdm(enumerate(dataloader_batched), total=len(dataloader_batched)):
-        encoded_audio = voice_encoder(batch)
-        logger.info(f'Processing batch: {idx}')
+    with ThreadPoolExecutor() as executor:
+        for idx, batch in tqdm(enumerate(dataloader_batched), total=len(dataloader_batched)):
+            logger.info(f'Processing batch: {idx}')
+            encoded_audio = voice_encoder(batch)
+            for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
+                logger.info(f"Processed iteration {jdx}, batch: {idx}")
+                for fp in file_pointers:
+                     executor.submit(save_audio_tokens, tokens_batch[fp.start_idx: fp.end_idx], fp, outdir)
+                logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
 
-        for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
-            logger.info(f"Processed iteration {jdx}, batch: {idx}")
-
-            # tokens_batch = tokens_batch.cpu()
-            for fp in file_pointers:
-                output_queue.put((tokens_batch[fp.start_idx: fp.end_idx], fp))
-
-            logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
-
-        logger.info(f"Processed batch: {idx}")
-
-    for _ in range(num_writer_processes):
-        output_queue.put(None)
-
-    for p in writer_processes:
-        p.join()
+            logger.info(f"Processed batch: {idx}")
 
     print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
 
@@ -95,7 +64,6 @@ if __name__ == '__main__':
         --device cuda:0
     """
     import argparse
-    mp.set_start_method('spawn', force=True)
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert'], type=str, required=True, help='Encoder to run.')
@@ -137,10 +105,9 @@ if __name__ == '__main__':
         )
 
     elif args.tokenizer == 'hubert':
-        encoder = HubertEncoder(device=DEVICE)  # type: ignore
+        encoder = HubertEncoder(device=DEVICE) # type: ignore
 
-        processor = Wav2Vec2FeatureExtractor.from_pretrained(
-            HubertEncoderConfig.model_id)
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
         tranform_func = partial(
             preprocess_audio, sample_rate=HubertEncoderConfig.audio_sample_rate, processor=processor
@@ -153,7 +120,7 @@ if __name__ == '__main__':
         #     transform=tranform_func
         # )
 
-        dataset = GigaSpeechDataset(  # type: ignore
+        dataset = GigaSpeechDataset( # type: ignore
             sample_rate=HubertEncoderConfig.audio_sample_rate,
             size="xs",
             split="train",
@@ -167,5 +134,5 @@ if __name__ == '__main__':
         voice_encoder=encoder,
         dataset=dataset,
         batch_size=args.batch_size,
-        outdir=outdir,
+        outdir=outdir
     )

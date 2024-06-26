@@ -129,7 +129,9 @@ class VoiceEncoder:
         # Have a global batch size
         while read_q:
             local_sample, local_config = read_q.pop()
+            logger.info(f'Processing started for local config {local_config}')
             local_batch, local_batch_idx = self.prepare_batch(local_sample)
+            logger.info('Processed local batch')
             local_config.length_tokens = self.config.token_length
             # local_config: AudioConfig
 
@@ -229,9 +231,10 @@ class HubertEncoder:
             self.model = torch.compile(self.model)#, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn((1, 16000), device=self.device)#, dtype=torch.float16)
+            input = torch.randn((10, 1, 16000), device=self.device)#, dtype=torch.float16)
+            am = torch.ones((10, 16000), device=self.device)#, dtype=torch.float16
             for _ in range(5):
-                _ = self.model(input, output_hidden_states=True).hidden_states
+                _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
         kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
         self.km = joblib.load(kmeans_path)
@@ -259,9 +262,9 @@ class HubertEncoder:
                 segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[0]), value=0)
 
             segments.append(segment)
-            attention_mask.append(torch.Tensor(local_attention_mask))
+            attention_mask.append(local_attention_mask)
 
-        return torch.vstack(segments), torch.vstack(attention_mask), len(segments)  # (B, T)
+        return torch.vstack(segments), torch.Tensor(attention_mask), len(segments)  # (B, T)
 
     def encode_global_batch(self, global_batch_idx: int):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):

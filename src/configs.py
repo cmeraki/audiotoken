@@ -8,7 +8,7 @@ class VoiceEncoderConfig:
     bandwidth: float = 12
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 128
+    batch_size: int = 64
     token_length: int = 75
 
 @dataclass
@@ -21,7 +21,7 @@ class HubertEncoderConfig:
     audio_sample_rate: int = 16_000
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 32
+    batch_size: int = 8
     token_length: int = 50
 
 @dataclass
