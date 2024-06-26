@@ -54,25 +54,25 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
     try:
         filename = audio_pointer.file_name.split('/')[-1].split('.')[0]
         save_path = os.path.join(root_dir, f'{filename}.npy')
-        tokens_to_save = tokens[audio_pointer.start_idx:audio_pointer.end_idx]
-        B, K, T = tokens_to_save.size()
-        tokens_to_save = tokens_to_save.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
+        # tokens_to_save = tokens[audio_pointer.start_idx:audio_pointer.end_idx]
+        B, K, T = tokens.size()
+        tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
         tokens_len = audio_pointer.tokens_len # type: ignore
 
-        logger.info(f'Saving file: {filename} with shape: {tokens_to_save.shape} to {save_path} and length: {tokens_len} and samples: {audio_pointer.length_samples}')
+        logger.info(f'Saving file: {filename} with shape: {tokens.shape} to {save_path} and length: {tokens_len} and samples: {audio_pointer.length_samples}')
 
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
-            prev_tokens = np.hstack([prev_tokens, tokens_to_save])
+            prev_tokens = np.hstack([prev_tokens, tokens])
             np.save(save_path, prev_tokens[:, :tokens_len])
 
         else:
-            np.save(save_path, tokens_to_save[:, :tokens_len])
+            np.save(save_path, tokens[:, :tokens_len])
 
         logger.info(f"Saved tokens for {audio_pointer.file_name} to {save_path}")
 
     except Exception as e:
-        print(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
+        logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
 
 def preprocess_audio(audio, sample_rate, processor):
 

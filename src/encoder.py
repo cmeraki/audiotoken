@@ -280,7 +280,10 @@ class HubertEncoder:
                 logger.debug(f'Min dist size: {min_dist.shape}')
                 self.global_batch.zero_()
 
-                return min_dist.transpose(1, 2) # B, 1, T
+                min_dist = min_dist.transpose(1, 2)  # B, 1, T
+                # min_dist.share_memory_()
+
+                return min_dist
 
     def __call__(self, read_q: List[Tuple[torch.Tensor, AudioConfig]]):
         """
@@ -297,9 +300,11 @@ class HubertEncoder:
             local_sample, local_config = read_q.pop()
             local_config.length_tokens = self.config.token_length
 
-            logger.debug(f'Processing started for local config {local_config}')
+            logger.info(f'Processing started for local config {local_config}')
 
             local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
+
+            logger.info('Processed local batch')
 
             # If we get a local batch that is larger than the global batch size, we need to split it
             # process one part that fits in the global batch now and the rest later
@@ -310,7 +315,6 @@ class HubertEncoder:
                 local_config.end_idx = self.batch_size
                 file_pointers.append(local_config)
 
-                # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
                 self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
                 self.global_attention_mask[global_batch_idx:] = local_attention_mask[:self.batch_size-global_batch_idx]
 

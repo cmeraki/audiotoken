@@ -7,6 +7,7 @@ from encodec.utils import convert_audio
 
 from .configs import AudioConfig
 from .utils import read_audio
+from .logger import logger
 
 class AudioDataset(Dataset):
     def __init__(
@@ -76,5 +77,5 @@ class GigaSpeechDataset(Dataset):
             return waveform, audio_config
 
         except Exception as e:
-            print(f"Error converting audio: {e}")
+            logger.error(f"Error converting audio: {e}")
             return None, None

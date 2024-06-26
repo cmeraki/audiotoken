@@ -1,6 +1,7 @@
 import os
 import time
 import torch
+import psutil
 from tqdm import tqdm
 from functools import partial
 from pathlib import Path
@@ -18,16 +19,18 @@ from .logger import logger
 def collate_fn_batched(batch):
     return [(waveform, audio_config) for waveform, audio_config in batch]
 
-@torch.inference_mode()
-def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 1):
 
-    def save_audio_tokens_worker(output_queue, outdir):
-        while True:
-            item = output_queue.get()
-            if item is None:  # Signal to end the process
-                break
-            tokens_batch, fp = item
-            save_audio_tokens(tokens_batch, fp, outdir)
+def save_audio_tokens_worker(output_queue, outdir):
+    while True:
+        item = output_queue.get()
+        if item is None:  # Signal to end the process
+            break
+        tokens_batch, fp = item
+        save_audio_tokens(tokens_batch, fp, outdir)
+
+
+@torch.inference_mode()
+def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 4):
 
     writer_processes = []
     output_queue: mp.Queue = mp.Queue() # type: ignore
@@ -44,8 +47,8 @@ def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 1)
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn_batched,
-        num_workers=20,
-        prefetch_factor=12,
+        num_workers=12,
+        prefetch_factor=4,
         pin_memory=True
     )
 
@@ -53,13 +56,18 @@ def encode(voice_encoder, dataset, batch_size, outdir, num_writer_processes = 1)
 
     for idx, batch in tqdm(enumerate(dataloader_batched), total=len(dataloader_batched)):
         encoded_audio = voice_encoder(batch)
-        logger.info(f'Processing batch {idx}')
+        logger.info(f'Processing batch: {idx}')
+
         for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
-            logger.debug(f"Processed iteration {jdx}, batch: {idx}")
+            logger.info(f"Processed iteration {jdx}, batch: {idx}")
+
+            # tokens_batch = tokens_batch.cpu()
             for fp in file_pointers:
-                output_queue.put((tokens_batch.cpu(), fp))
-            logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
-        logger.info(f"Processed batch {idx}")
+                output_queue.put((tokens_batch[fp.start_idx: fp.end_idx], fp))
+
+            logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
+
+        logger.info(f"Processed batch: {idx}")
 
     for _ in range(num_writer_processes):
         output_queue.put(None)
@@ -87,7 +95,7 @@ if __name__ == '__main__':
         --device cuda:0
     """
     import argparse
-    # mp.set_start_method('spawn', force=True)
+    mp.set_start_method('spawn', force=True)
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert'], type=str, required=True, help='Encoder to run.')

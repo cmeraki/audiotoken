@@ -15,7 +15,7 @@ def serialize_log(record):
     # You can add more fields here if needed
     return subset
 
-def get_logger(log_file="app.log"):
+def get_logger(log_file="app.log", level: str = "INFO"):
 
     os.makedirs("logs", exist_ok=True)
     logger.remove()
@@ -27,9 +27,9 @@ def get_logger(log_file="app.log"):
     logger.add(
         log_file,
         format=format,
-        rotation="10 MB",
+        rotation="100 MB",
         retention="1 week",
-        level="DEBUG",
+        level=level,
         enqueue=True,
     )
 
