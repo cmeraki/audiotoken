@@ -59,7 +59,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
         tokens_len = audio_pointer.tokens_len # type: ignore
 
-        logger.info(f'Saving file: {filename} with shape: {tokens.shape} to {save_path} and length: {tokens_len} and samples: {audio_pointer.length_samples}')
+        logger.info(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
 
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
@@ -69,7 +69,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         else:
             np.save(save_path, tokens[:, :tokens_len])
 
-        logger.info(f"Saved tokens for {audio_pointer.file_name} to {save_path}")
+        logger.info(f"Saved tokens for {filename} to {save_path}")
 
     except Exception as e:
         logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')

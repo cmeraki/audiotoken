@@ -37,7 +37,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
             logger.info(f'Processing batch: {idx}')
             encoded_audio = voice_encoder(batch)
             for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
-                logger.info(f"Processed iteration {jdx}, batch: {idx}")
+                logger.info(f"Processed iteration {jdx}, batch: {idx}, dtype: {tokens_batch.dtype}")
                 for fp in file_pointers:
                      executor.submit(save_audio_tokens, tokens_batch[fp.start_idx: fp.end_idx], fp, outdir)
                 logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")

@@ -81,13 +81,13 @@ class VoiceEncoder:
 
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
+            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
             # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn(1, 1, self.segment_length, device=device)
+            input = torch.randn(self.config.batch_size, 1, self.segment_length, device=device)
             for _ in range(5):
                 self.model(input)
 
@@ -112,7 +112,7 @@ class VoiceEncoder:
                     emb, self.model.frame_rate, self.model.bandwidth
                 )
                 # TODO: Add cutoff support
-                codes = codes.transpose(0, 1)  # [B, K, T]
+                codes = codes.transpose(0, 1).to(dtype=torch.int16)  # [B, K, T]
                 self.global_batch.zero_()
                 return codes
 
@@ -225,14 +225,14 @@ class HubertEncoder:
 
             torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
             torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("medium") # set matmul precision to use either bfloat16 or tf32
+            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
             # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
             self.model = torch.compile(self.model)#, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn((10, 1, 16000), device=self.device)#, dtype=torch.float16)
-            am = torch.ones((10, 16000), device=self.device)#, dtype=torch.float16
+            input = torch.randn((self.config.batch_size, 16000), device=self.device)#, dtype=torch.float16)
+            am = torch.ones((self.config.batch_size, 16000), device=self.device)#, dtype=torch.float16
             for _ in range(5):
                 _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
@@ -272,19 +272,20 @@ class HubertEncoder:
                 waveforms = self.global_batch[:global_batch_idx]
                 attention_mask = self.global_attention_mask[:global_batch_idx]
 
+                logger.info(f"Waveform size: {waveforms.shape}, Attention mask size: {attention_mask.shape}")
+
                 embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
 
-                logger.debug(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}')
+                logger.info(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}, dtype: {embeddings.dtype}')
 
                 # Compute L2 norm
                 distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                 min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
 
-                logger.debug(f'Min dist size: {min_dist.shape}')
                 self.global_batch.zero_()
 
-                min_dist = min_dist.transpose(1, 2)  # B, 1, T
-                # min_dist.share_memory_()
+                min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                logger.info(f'Min dist size: {min_dist.shape}')
 
                 return min_dist
 
@@ -303,7 +304,7 @@ class HubertEncoder:
             local_sample, local_config = read_q.pop()
             local_config.length_tokens = self.config.token_length
 
-            logger.info(f'Processing started for local config {local_config}')
+            logger.info(f'Processing started for local config {local_config.file_name}')
 
             local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
 
