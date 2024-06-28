@@ -12,37 +12,46 @@ from transformers import Wav2Vec2FeatureExtractor
 from .encoder import VoiceEncoder, HubertEncoder
 from .configs import VoiceEncoderConfig, HubertEncoderConfig
 from .utils import find_audio_files, save_audio_tokens, preprocess_audio
-from .datasets import AudioDataset, GigaSpeechDataset
+from .datasets import AudioBatchDataset, GigaSpeechDataset
 from .logger import logger
 
-def collate_fn_batched(batch):
-    return [(waveform, audio_config) for waveform, audio_config in batch]
+
+def collate_fn(batch):
+        segments, attention_masks, file_names = zip(*batch)
+        return torch.stack(segments), torch.stack(attention_masks), file_names
+
+def batch_generator(dataloader):
+    for batch in dataloader:
+        yield batch
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
-    dataloader_batched = DataLoader(
+    dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=collate_fn_batched,
+        collate_fn=collate_fn,
         num_workers=12,
         prefetch_factor=4,
         pin_memory=True
     )
+    dataloader = batch_generator(dataloader)
 
     start_time = time.time()
 
-    with ThreadPoolExecutor() as executor:
-        for idx, batch in tqdm(enumerate(dataloader_batched), total=len(dataloader_batched)):
-            logger.info(f'Processing batch: {idx}')
-            encoded_audio = voice_encoder(batch)
-            for jdx, (tokens_batch, file_pointers) in enumerate(encoded_audio):
-                logger.info(f"Processed iteration {jdx}, batch: {idx}, dtype: {tokens_batch.dtype}")
-                for fp in file_pointers:
-                     executor.submit(save_audio_tokens, tokens_batch[fp.start_idx: fp.end_idx], fp, outdir)
-                logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
+    for idx, (input_ids, attention_masks, file_pointers) in tqdm(enumerate(dataloader)):
+        logger.info(f'Processing batch: {idx}')
 
-            logger.info(f"Processed batch: {idx}")
+        input_ids = input_ids.to(DEVICE)
+        attention_masks = attention_masks.to(DEVICE)
+        encoded_audio = voice_encoder(input_ids, attention_masks)
+
+        logger.info(f"Processed batch: {idx}")
+
+        for jdx, (tokens_batch, file_pointer) in enumerate(zip(encoded_audio, file_pointers)):
+            logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
+            save_audio_tokens(tokens_batch, file_pointer, outdir)
+
 
     print(f"Fixed batching encoding time: {time.time() - start_time:.2f}s")
 
@@ -87,22 +96,21 @@ if __name__ == '__main__':
         encoder = VoiceEncoder(
             bandwidth=VoiceEncoderConfig.bandwidth,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            batch_size=VoiceEncoderConfig.batch_size,
-            overlap=VoiceEncoderConfig.overlap,
             device=DEVICE,
         )
 
-        # dataset = AudioDataset(
-        #     files,
-        #     sample_rate=VoiceEncoderConfig.model_sample_rate,
-        #     channels=1,
-        # )
-
-        dataset = GigaSpeechDataset(  # type: ignore
+        dataset = AudioBatchDataset(
+            files,
             sample_rate=VoiceEncoderConfig.model_sample_rate,
-            size="xs",
-            split="train",
+            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+            model_token_rate=VoiceEncoderConfig.model_token_rate
         )
+
+        # dataset = GigaSpeechDataset(  # type: ignore
+        #     sample_rate=VoiceEncoderConfig.model_sample_rate,
+        #     size="xs",
+        #     split="train",
+        # )
 
     elif args.tokenizer == 'hubert':
         encoder = HubertEncoder(device=DEVICE) # type: ignore
@@ -110,22 +118,25 @@ if __name__ == '__main__':
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
         tranform_func = partial(
-            preprocess_audio, sample_rate=HubertEncoderConfig.audio_sample_rate, processor=processor
+            preprocess_audio,
+            sample_rate=HubertEncoderConfig.model_sample_rate,
+            processor=processor
         )
 
-        # dataset = AudioDataset(
-        #     files,
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=HubertEncoderConfig.model_sample_rate,
+            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            transform=tranform_func,
+            model_token_rate=HubertEncoderConfig.model_token_rate
+        )
+
+        # dataset = GigaSpeechDataset( # type: ignore
         #     sample_rate=HubertEncoderConfig.audio_sample_rate,
-        #     channels=1,
+        #     size="xs",
+        #     split="train",
         #     transform=tranform_func
         # )
-
-        dataset = GigaSpeechDataset( # type: ignore
-            sample_rate=HubertEncoderConfig.audio_sample_rate,
-            size="xs",
-            split="train",
-            transform=tranform_func
-        )
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)

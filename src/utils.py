@@ -54,9 +54,11 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
     try:
         filename = audio_pointer.file_name.split('/')[-1].split('.')[0]
         save_path = os.path.join(root_dir, f'{filename}.npy')
-        # tokens_to_save = tokens[audio_pointer.start_idx:audio_pointer.end_idx]
-        B, K, T = tokens.size()
-        tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
+
+        # B, K, T = tokens.size()
+        # tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
+
+        tokens = tokens.cpu().numpy()
         tokens_len = audio_pointer.tokens_len # type: ignore
 
         logger.info(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
