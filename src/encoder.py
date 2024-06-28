@@ -87,7 +87,7 @@ class VoiceEncoder:
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn(self.config.batch_size, 1, self.segment_length, device=device)
+            input = torch.randn(1, 1, self.segment_length, device=device)
             for _ in range(5):
                 self.model(input)
 
