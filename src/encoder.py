@@ -87,7 +87,7 @@ class VoiceEncoder:
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
-            input = torch.randn(self.config.batch_size, 1, self.segment_length, device=device)
+            input = torch.randn(1, 1, self.segment_length, device=device)
             for _ in range(5):
                 self.model(input)
 
@@ -216,7 +216,7 @@ class HubertEncoder:
 
         self.model = HubertModel.from_pretrained(model_id)#,attn_implementation="flash_attention_2", torch_dtype=torch.float16)
         self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
-        self.global_attention_mask = torch.ones(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
+        self.global_attention_mask = torch.ones(self.batch_size, self.segment_length, device=self.device, dtype=torch.bool)
 
         self.model.eval()
 
@@ -250,21 +250,28 @@ class HubertEncoder:
 
     def prepare_batch(self, audio: torch.Tensor):
         _, length = audio.shape
-        segments, attention_mask = [], []
+        segments = []
+        last_segment_length = 0
 
         logger.debug(f'Creating segments for audio of length {length}')
+
+        num_segments = 0
         for i in range(0, length, self.stride):
             segment = audio[0, i:i+self.segment_length]
-            local_attention_mask = [1] * len(segment)
 
             if segment.shape[0] < self.segment_length:
-                local_attention_mask += [0] * (self.segment_length - segment.shape[0])
-                segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[0]), value=0)
+                last_segment_length = self.segment_length - segment.shape[0]
+                segment = torch.nn.functional.pad(segment, (0, last_segment_length), value=0)
 
             segments.append(segment)
-            attention_mask.append(local_attention_mask)
+            num_segments += 1
 
-        return torch.vstack(segments), torch.Tensor(attention_mask), len(segments)  # (B, T)
+        segments_tensor = torch.vstack(segments)
+        attention_mask = torch.ones_like(segments_tensor, dtype=torch.bool)
+        if last_segment_length > 0:
+            attention_mask[-1, last_segment_length:] = False
+
+        return segments_tensor, attention_mask, len(segments)  # (B, T)
 
     def encode_global_batch(self, global_batch_idx: int):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
