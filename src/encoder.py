@@ -115,7 +115,7 @@ class HubertEncoder:
             torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
             # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-            self.model = torch.compile(self.model)#, mode="reduce-overhead")
+            self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # warmup the model
             input = torch.randn((self.batch_size, 16000), device=self.device)#, dtype=torch.float16)
