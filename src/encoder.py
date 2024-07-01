@@ -28,51 +28,19 @@ class TextEncoder:
         )
 
 class VoiceEncoder:
-    """
-    Wrapper over Encodec model to encode a list of audio files.
-
-    >>> from src.encoder import VoiceEncoder
-    >>> voice_encoder = VoiceEncoder(
-    >>>    bandwidth=6.0,
-    >>>    single_segment_duration=2,
-    >>>    batch_size=100,
-    >>>    overlap=0.1,
-    >>>    device='cuda'
-    >>> )
-    >>> audio_files = []
-    >>> ... # Add audio files to the list
-    >>> encoded_audio = voice_encoder(read_q=audio_files)
-    >>> for idx, batch in enumerate(encoded_audio):
-    >>>     print(idx, batch.shape)
-    """
-
     def __init__(
             self,
             bandwidth: float,
             single_segment_duration: int,
-            overlap: float = 0.1,
             batch_size: int = 100,
-            config: VoiceEncoderConfig = VoiceEncoderConfig(),
             device: str = 'cpu'
         ):
 
         self.model = EncodecModel.encodec_model_24khz()
         self.model.set_target_bandwidth(bandwidth)
+
         self.device = torch.device(device)
-        self.config = config
-        self.pad_token = 0
-        self.eos_token = -1
-
-        # Params for batch processing
-        self.overlap = overlap
         self.segment_length = self.model.sample_rate * single_segment_duration
-        self.stride = int(self.segment_length - self.overlap * self.model.sample_rate)
-        self.batch_size = batch_size
-
-        # Overlap introduced in the tokens
-        self.cutoff = int(75 * self.overlap)
-
-        self.global_batch = torch.zeros(self.batch_size, 1, self.segment_length, device=self.device)
 
         self.model.eval()
 
@@ -86,113 +54,26 @@ class VoiceEncoder:
 
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
-            # warmup the model
+            # Warmup the model
             input = torch.randn(1, 1, self.segment_length, device=device)
             for _ in range(5):
                 self.model(input)
 
-    def prepare_batch(self, audio: torch.Tensor):
-        _, length = audio.shape
-        segments = []
-
-        for i in range(0, length, self.stride):
-            segment = audio[:, i:i+self.segment_length]
-            if segment.shape[1] < self.segment_length:
-                segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[1]), value=0)
-
-            segments.append(segment)
-
-        return torch.vstack(segments).unsqueeze(1), len(segments)
-
-    def encode_global_batch(self, global_batch_idx: int):
+    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
-                emb = self.model.encoder(self.global_batch[:global_batch_idx])
+
+                emb = self.model.encoder(input_batch.unsqueeze(1))
+
                 codes = self.model.quantizer.encode(
                     emb, self.model.frame_rate, self.model.bandwidth
                 )
+
                 # TODO: Add cutoff support
                 codes = codes.transpose(0, 1).to(dtype=torch.int16)  # [B, K, T]
-                self.global_batch.zero_()
-                return codes
+                logger.info(f'Embedding shape: {emb.shape}, Codes shape: {codes.shape}')
 
-    def __call__(self, read_q: List[Tuple[torch.Tensor, AudioConfig]]):
-        """
-        Implements forward pass of the Encodec model
-
-        The input x is a list of audio files and the output is a list of list of tensors
-        representing the encoded audio files
-        """
-        global_batch_idx = 0
-        file_pointers = []
-
-        # Have a global batch size
-        while read_q:
-            local_sample, local_config = read_q.pop()
-            logger.info(f'Processing started for local config {local_config}')
-            local_batch, local_batch_idx = self.prepare_batch(local_sample)
-            logger.info('Processed local batch')
-            local_config.length_tokens = self.config.token_length
-            # local_config: AudioConfig
-
-            logger.debug(f'Local batch size {local_batch_idx} and local batch shape {local_batch.shape}')
-
-            # If we get a local batch that is larger than the global batch size, we need to split it
-            # process one part that fits in the global batch now and the rest later
-            if local_batch_idx + global_batch_idx > self.batch_size:
-                logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = self.batch_size
-                file_pointers.append(local_config)
-
-                # logger.info(f'Start idx : {start_idx} and end idx : {end_idx}')
-                self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
-
-                yield (self.encode_global_batch(self.batch_size), file_pointers)
-
-                file_pointers = []
-                local_config.start_idx = 0
-                local_config.end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-                file_pointers.append(local_config)
-
-                # Flush the reamining local batch to the global batch
-                self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
-                global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-
-                continue
-
-            # If we get a local batch that does not fill the global batch, we can add it to the global batch
-            if local_batch_idx + global_batch_idx < self.batch_size:
-                logger.debug(f'Adding to global batch. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append(local_config)
-
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-                global_batch_idx += local_batch_idx
-
-                continue
-
-            # If the local batch fills the global batch, we can yield the encoding of the global batch
-            if local_batch_idx + global_batch_idx == self.batch_size:
-                logger.debug(f'Global batch is full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append(local_config)
-
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-
-                yield (self.encode_global_batch(self.batch_size), file_pointers)
-
-                file_pointers = []
-                global_batch_idx = 0
-
-        if global_batch_idx > 0:
-            logger.debug(f'Global batch is not full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-            yield (self.encode_global_batch(global_batch_idx), file_pointers)
+                return codes.detach()
 
 
 class HubertEncoder:
@@ -204,10 +85,7 @@ class HubertEncoder:
 
         model_id = config.model_id
         self.batch_size = config.batch_size
-        self.audio_sample_rate = config.audio_sample_rate
-        self.segment_length = config.audio_sample_rate * config.single_segment_duration
-        self.overlap = config.overlap
-        self.stride = int(self.segment_length - self.overlap * self.audio_sample_rate)
+        self.segment_length = config.model_sample_rate * config.single_segment_duration
         self.device = torch.device(device)
         self.config = config
 
@@ -215,26 +93,8 @@ class HubertEncoder:
         self.output_layer = 11
 
         self.model = HubertModel.from_pretrained(model_id)#,attn_implementation="flash_attention_2", torch_dtype=torch.float16)
-        self.global_batch = torch.zeros(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
-        self.global_attention_mask = torch.ones(self.batch_size, self.segment_length, device=self.device)#, dtype=torch.float16)
 
         self.model.eval()
-
-        if device != 'cpu':
-            self.model.to(self.device)
-
-            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
-            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
-            self.model = torch.compile(self.model)#, mode="reduce-overhead")
-
-            # warmup the model
-            input = torch.randn((self.config.batch_size, 16000), device=self.device)#, dtype=torch.float16)
-            am = torch.ones((self.config.batch_size, 16000), device=self.device)#, dtype=torch.float16
-            for _ in range(5):
-                _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
         kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
         self.km = joblib.load(kmeans_path)
@@ -247,34 +107,28 @@ class HubertEncoder:
         del(self.C_np)
         del(self.Cnorm_np)
 
+        if device != 'cpu':
+            self.model.to(self.device)
 
-    def prepare_batch(self, audio: torch.Tensor):
-        _, length = audio.shape
-        segments, attention_mask = [], []
+            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
+            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-        logger.debug(f'Creating segments for audio of length {length}')
-        for i in range(0, length, self.stride):
-            segment = audio[0, i:i+self.segment_length]
-            local_attention_mask = [1] * len(segment)
+            self.model = torch.compile(self.model, mode="reduce-overhead")
 
-            if segment.shape[0] < self.segment_length:
-                local_attention_mask += [0] * (self.segment_length - segment.shape[0])
-                segment = torch.nn.functional.pad(segment, (0, self.segment_length - segment.shape[0]), value=0)
+            # warmup the model
+            input = torch.randn((self.batch_size, 16000), device=self.device)#, dtype=torch.float16)
+            am = torch.ones((self.batch_size, 16000), device=self.device)#, dtype=torch.float16
+            for _ in range(5):
+                _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
-            segments.append(segment)
-            attention_mask.append(local_attention_mask)
-
-        return torch.vstack(segments), torch.Tensor(attention_mask), len(segments)  # (B, T)
-
-    def encode_global_batch(self, global_batch_idx: int):
+    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
-                waveforms = self.global_batch[:global_batch_idx]
-                attention_mask = self.global_attention_mask[:global_batch_idx]
+                logger.info(f"Waveform size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
 
-                logger.info(f"Waveform size: {waveforms.shape}, Attention mask size: {attention_mask.shape}")
-
-                embeddings = self.model.forward(waveforms, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
 
                 logger.info(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}, dtype: {embeddings.dtype}')
 
@@ -282,97 +136,16 @@ class HubertEncoder:
                 distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                 min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
 
-                self.global_batch.zero_()
-
                 min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
                 logger.info(f'Min dist size: {min_dist.shape}')
 
                 return min_dist
 
-    def __call__(self, read_q: List[Tuple[torch.Tensor, AudioConfig]]):
-        """
-        Implements forward pass of the Encodec model
-
-        The input x is a list of audio files and the output is a list of list of tensors
-        representing the encoded audio files
-        """
-        global_batch_idx = 0
-        file_pointers = []
-
-        # Have a global batch size
-        while read_q:
-            local_sample, local_config = read_q.pop()
-            local_config.length_tokens = self.config.token_length
-
-            logger.info(f'Processing started for local config {local_config.file_name}')
-
-            local_batch, local_attention_mask, local_batch_idx = self.prepare_batch(local_sample)
-
-            logger.info('Processed local batch')
-
-            # If we get a local batch that is larger than the global batch size, we need to split it
-            # process one part that fits in the global batch now and the rest later
-            if local_batch_idx + global_batch_idx > self.batch_size:
-                logger.debug(f'Global batch is overflowing, yielding. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = self.batch_size
-                file_pointers.append(local_config)
-
-                self.global_batch[global_batch_idx:] = local_batch[:self.batch_size-global_batch_idx]
-                self.global_attention_mask[global_batch_idx:] = local_attention_mask[:self.batch_size-global_batch_idx]
-
-                yield (self.encode_global_batch(self.batch_size), file_pointers)
-
-                file_pointers = []
-                local_config.start_idx = 0
-                local_config.end_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-                file_pointers.append(local_config)
-
-                # Flush the reamining local batch to the global batch
-                self.global_batch[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_batch[self.batch_size-global_batch_idx:]
-                self.global_attention_mask[:local_batch_idx - (self.batch_size-global_batch_idx)] = local_attention_mask[self.batch_size-global_batch_idx:]
-
-                global_batch_idx = local_batch_idx - (self.batch_size-global_batch_idx)
-
-                continue
-
-            # If we get a local batch that does not fill the global batch, we can add it to the global batch
-            if local_batch_idx + global_batch_idx < self.batch_size:
-                logger.debug(f'Adding to global batch. Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append(local_config)
-
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-                self.global_attention_mask[global_batch_idx:global_batch_idx+local_batch_idx] = local_attention_mask
-
-                global_batch_idx += local_batch_idx
-
-                continue
-
-            # If the local batch fills the global batch, we can yield the encoding of the global batch
-            if local_batch_idx + global_batch_idx == self.batch_size:
-                logger.debug(f'Global batch is full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-
-                local_config.start_idx = global_batch_idx
-                local_config.end_idx = global_batch_idx + local_batch_idx
-                file_pointers.append(local_config)
-
-                self.global_batch[global_batch_idx:global_batch_idx+local_batch_idx] = local_batch
-                self.global_attention_mask[global_batch_idx:global_batch_idx+local_batch_idx] = local_attention_mask
-
-                yield (self.encode_global_batch(self.batch_size), file_pointers)
-
-                file_pointers = []
-                global_batch_idx = 0
-
-        if global_batch_idx > 0:
-            logger.debug(f'Global batch is not full, yielding, Local batch index {local_batch_idx} and global batch index {global_batch_idx}')
-            yield (self.encode_global_batch(global_batch_idx), file_pointers)
 
 if __name__ == '__main__':
+    pass
+
+    """
     from time import time
     from pathlib import Path
     from argparse import ArgumentParser
@@ -436,3 +209,4 @@ if __name__ == '__main__':
         print(idx, batch, batch[0].shape)
 
     print(f'Hubert encoding took {time() - start_time:.2f}s')
+    """

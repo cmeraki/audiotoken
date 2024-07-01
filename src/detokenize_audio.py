@@ -41,7 +41,7 @@ if __name__ == '__main__':
         encoded_audio_q: Queue[torch.Tensor] = Queue()
 
         tokens = np.load(a)
-        tokens = torch.tensor(tokens, device=args.device)#.unsqueeze(0)
+        tokens = torch.tensor(tokens, device=args.device, dtype=torch.int64).unsqueeze(0)
 
         encoded_audio_q.put(tokens)
 

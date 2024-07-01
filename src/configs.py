@@ -9,7 +9,7 @@ class VoiceEncoderConfig:
     single_segment_duration: int = 10
     overlap: float = 0
     batch_size: int = 64
-    token_length: int = 75
+    model_token_rate: int = 75
 
 @dataclass
 class VoiceDecoderConfig(VoiceEncoderConfig):
@@ -18,11 +18,11 @@ class VoiceDecoderConfig(VoiceEncoderConfig):
 @dataclass
 class HubertEncoderConfig:
     model_id: str = 'voidful/mhubert-base'
-    audio_sample_rate: int = 16_000
+    model_sample_rate: int = 16_000
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 8
-    token_length: int = 50
+    batch_size: int = 64
+    model_token_rate: int = 50
 
 @dataclass
 class AudioConfig:
@@ -49,7 +49,7 @@ class AudioConfig:
 
     @property
     def tokens_len(self) -> int:
-        if self.length_tokens is None:
+        if self.length_tokens is None or self.length_seconds is None:
             raise ValueError("Length of tokens not set")
 
         return ceil(self.length_seconds * self.length_tokens) # type: ignore
