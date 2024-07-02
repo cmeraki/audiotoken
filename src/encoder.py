@@ -32,7 +32,6 @@ class VoiceEncoder:
             self,
             bandwidth: float,
             single_segment_duration: int,
-            batch_size: int = 100,
             device: str = 'cpu'
         ):
 
@@ -146,6 +145,7 @@ class Wav2VecBertEncoder:
     def __init__(
         self,
         config: Wav2VecBertConfig,
+        quantize: bool = False,
         device: str = 'cpu'
     ):
 
@@ -157,24 +157,24 @@ class Wav2VecBertEncoder:
 
         self.processor = AutoFeatureExtractor.from_pretrained(model_id)
         self.model = Wav2Vec2BertModel.from_pretrained(model_id).to(self.device)
+        self.quantize = quantize
 
         self.model.eval()
 
         logger.info(f'Ouput layer: {self.output_layer}')
 
-        # K Means model loading
-        """
-        kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
-        self.km = joblib.load(kmeans_path)
-        self.C_np = self.km.cluster_centers_.transpose()
-        self.Cnorm_np = (self.C_np ** 2).sum(0)
+        if self.quantize:
+            kmeans_path = Path('./data/kmeans/kmeans__L-1_C1024_ckpt10.pkl').resolve()
 
-        self.C = torch.from_numpy(self.C_np).t().to(self.device)
-        self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+            self.km = joblib.load(kmeans_path)
+            self.C_np = self.km.cluster_centers_.transpose()
+            self.Cnorm_np = (self.C_np ** 2).sum(0)
 
-        del(self.C_np)
-        del(self.Cnorm_np)
-        """
+            self.C = torch.from_numpy(self.C_np).t().to(self.device)
+            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+
+            del(self.C_np)
+            del(self.Cnorm_np)
 
         if device != 'cpu':
 
@@ -213,73 +213,126 @@ class Wav2VecBertEncoder:
 
                 logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
+                if self.quantize:
+                    # Compute L2 norm
+                    distances = torch.cdist(embeddings, self.C)  # (B, T, K)
+                    min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
+
+                    min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                    logger.info(f'Min dist size: {min_dist.shape}')
+
+                    return min_dist
+
                 return embeddings
 
 if __name__ == '__main__':
-    pass
-
     """
+    python -m src.encoder --tokenizer encodec --indir /path/to/audio/files --outdir /path/to/output/directory
+    """
+    import os
     from time import time
     from pathlib import Path
     from argparse import ArgumentParser
     from .configs import VoiceEncoderConfig
+    from .utils import find_audio_files, save_audio_tokens
 
-    parser = ArgumentParser(description='Encode audio files.')
-    parser.add_argument('--audio_file', type=str, required=True, help='Input filename for audio files.')
+    parser = ArgumentParser(description='Encode audio files in indir one by one using the tokenizer specified. Writes tokens to outdir')
+
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'wav2vec'], type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--indir', type=str, required=True, help='Input filename for audio files.')
+    parser.add_argument('--outdir', type=str, required=False, help='Output directory for encoded files.')
+
     args = parser.parse_args()
 
-    audio_file_paths = [args.audio_file]
+    audio_file_paths = find_audio_files(args.indir)
     audio_files = []
-    save_path = './tmp/tokens_0.pt'
+
+    os.makedirs(args.outdir, exist_ok=True)
+
     device = 'cuda:0'
 
-    for p in audio_file_paths:
-        a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
-        audio_files.append((
-            a,
-            AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
-        ))
+    print(f'Found {len(audio_file_paths)} audio files.')
 
-    voice_encoder = VoiceEncoder(
-        bandwidth=VoiceEncoderConfig.bandwidth,
-        single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        batch_size=VoiceEncoderConfig.batch_size,
-        overlap=VoiceEncoderConfig.overlap,
-        device=device
-    )
+    if args.tokenizer == 'encodec':
+        print(f'Encoding using encodec')
 
-    start_time = time()
-    encoded_audio = voice_encoder(read_q=audio_files)
+        for p in audio_file_paths:
+            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
+            audio_files.append((
+                a,
+                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
+            ))
 
-    result = []
-    for idx, batch in enumerate(encoded_audio):
-        print(idx, batch)
-        result.append(batch)
-        np.save(save_path, batch[0].detach().cpu().numpy())
+        voice_encoder = VoiceEncoder(
+            bandwidth=VoiceEncoderConfig.bandwidth,
+            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+            device=device
+        )
 
-    print(f'Encodec encoding took {time() - start_time:.2f}s')
+        start_time = time()
 
-    audio_files = []
-    processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+        for audio, audio_config in audio_files:
+            audio = audio.to(device)
 
-    for p in audio_file_paths:
-        a = read_audio(Path(p).expanduser(), 16_000)
-        a = preprocess_audio(a, 16_000, processor)
-        audio_files.append((
-            a,
-            AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000)
-        ))
+            encoded = voice_encoder(audio, torch.ones_like(audio))
+            print(encoded.shape)
+            save_audio_tokens(encoded, audio_config, args.outdir)
 
-    hubert_encoder = HubertEncoder(
-        config=HubertEncoderConfig(),
-        device=device
-    )
 
-    start_time = time()
-    encoded_audio = hubert_encoder(audio_files)
+        print(f'Encodec encoding took {time() - start_time:.2f}s')
 
-    for idx, batch in enumerate(encoded_audio):
-        print(idx, batch, batch[0].shape)
+    elif args.tokenizer == 'hubert':
+        print(f'Encoding using hubert')
 
-    print(f'Hubert encoding took {time() - start_time:.2f}s')
-    """
+        from transformers import Wav2Vec2FeatureExtractor
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+
+        for p in audio_file_paths:
+            a = read_audio(Path(p).expanduser(), 16_000)
+            a = preprocess_audio(a, 16_000, processor)
+            audio_files.append((
+                a,
+                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+            ))
+
+        hubert_encoder = HubertEncoder(
+            config=HubertEncoderConfig(),
+            device=device
+        )
+
+        start_time = time()
+
+        for audio, audio_config in audio_files:
+            audio = audio.to(device)
+            am = torch.ones_like(audio, device=device)
+
+            encoded = hubert_encoder(audio, am)
+            print(encoded.shape)
+            save_audio_tokens(encoded, audio_config, args.outdir)
+
+        print(f'Hubert encoding took {time() - start_time:.2f}s')
+
+    elif args.tokenizer == 'wav2vec':
+        print(f'Encoding using wav2vec')
+
+        for p in audio_file_paths:
+            a = read_audio(Path(p).expanduser(), 16_000)
+            audio_files.append((
+                a,
+                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+            ))
+
+        wav2vec_encoder = Wav2VecBertEncoder(
+            config=Wav2VecBertConfig(),
+            quantize=True,
+            device=device
+        )
+
+        start_time = time()
+
+        for audio, audio_config in audio_files:
+            encoded = wav2vec_encoder([audio], [torch.ones_like(audio)])
+            print(encoded.shape)
+            save_audio_tokens(encoded, audio_config, args.outdir)
+
+        print(f'Wav2Vec encoding took {time() - start_time:.2f}s')

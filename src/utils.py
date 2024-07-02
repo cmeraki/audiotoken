@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import psutil
 import numpy as np
 import torchaudio
 import numpy as np
@@ -117,3 +118,21 @@ def get_dataset_files(indir: str, hf_dataset: str):
         del (ds)
 
     return files
+
+def set_process_affinity(process_id, cores):
+    """
+    Given a process id and a list of cores, this function sets the process affinity to the list of cores
+
+    Args:
+        process_id (int): The process id of the process to set affinity to
+        cores (list): A list of cores to set the process affinity to
+
+    How to use:
+    ```python
+    from src.utils import set_process_affinity
+    # Set the process affinity to the first 4 cores
+    set_process_affinity(os.getpid(), [0, 1, 2, 3])
+    ```
+    """
+    p = psutil.Process(process_id)
+    p.cpu_affinity(cores)
