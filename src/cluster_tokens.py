@@ -6,16 +6,15 @@ import joblib
 import argparse
 import numpy as np
 from tqdm import tqdm
-from functools import partial
+import psutil
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
-from transformers import AutoFeatureExtractor
 
 from .logger import logger
 from .configs import KMeansClusterConfig, Wav2VecBertConfig
 from .datasets import AudioBatchDataset, batch_generator
-from .utils import get_dataset_files, preprocess_audio
+from .utils import get_dataset_files, set_process_affinity
 from .encoder import Wav2VecBertEncoder
 
 def collate_fn(batch):
@@ -81,8 +80,8 @@ def get_kmeans_batch(dataset, encoder, device, max_size=1000):
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=12,
-        prefetch_factor=4,
+        num_workers=4,
+        prefetch_factor=2,
         pin_memory=True
     )
     dataloader = batch_generator(dataloader)
@@ -147,6 +146,8 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
 
 def main(args):
 
+    logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
+
     # Get list of files based on either local directory or HF dataset
     files = get_dataset_files(args.indir, args.hf_dataset)
 
@@ -200,6 +201,8 @@ if __name__ == "__main__":
     """
     python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --layer -1 --device cuda
     """
+
+    set_process_affinity(os.getpid(), [p for p in range(12)])
 
     parser = get_parser()
     args = parser.parse_args()
