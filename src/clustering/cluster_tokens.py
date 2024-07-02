@@ -6,16 +6,14 @@ import joblib
 import argparse
 import numpy as np
 from tqdm import tqdm
-from functools import partial
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
-from transformers import AutoFeatureExtractor
 
 from ..logger import logger
 from ..configs import KMeansClusterConfig, Wav2VecBertConfig
-from ..datasets import AudioBatchDataset, batch_generator
-from ..utils import get_dataset_files, preprocess_audio
+from ..datasets import AudioBatchDataset
+from ..utils import get_dataset_files
 from ..encoder import Wav2VecBertEncoder
 
 def collate_fn(batch):
@@ -81,11 +79,10 @@ def get_kmeans_batch(dataset, encoder, device, max_size=1000):
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=12,
-        prefetch_factor=4,
+        num_workers=4,
+        prefetch_factor=2,
         pin_memory=True
     )
-    dataloader = batch_generator(dataloader)
 
     features_batch = []
     batch_size = 0
