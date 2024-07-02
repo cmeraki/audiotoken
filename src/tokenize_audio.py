@@ -11,17 +11,8 @@ from transformers import Wav2Vec2FeatureExtractor
 from .encoder import VoiceEncoder, HubertEncoder
 from .configs import VoiceEncoderConfig, HubertEncoderConfig
 from .utils import find_audio_files, save_audio_tokens, preprocess_audio
-from .datasets import AudioBatchDataset
+from .datasets import AudioBatchDataset, collate_fn, batch_generator
 from .logger import logger
-
-
-def collate_fn(batch):
-        segments, attention_masks, file_names = zip(*batch)
-        return torch.stack(segments), torch.stack(attention_masks), file_names
-
-def batch_generator(dataloader):
-    for batch in dataloader:
-        yield batch
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):

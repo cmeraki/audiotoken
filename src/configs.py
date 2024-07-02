@@ -24,6 +24,16 @@ class HubertEncoderConfig:
     batch_size: int = 64
     model_token_rate: int = 50
 
+
+@dataclass
+class Wav2VecBertConfig:
+    model_id: str = 'facebook/w2v-bert-2.0'
+    model_sample_rate: int = 16_000
+    single_segment_duration: int = 10
+    model_token_rate: int = 50
+    output_layer: int = -1
+
+
 @dataclass
 class AudioConfig:
     """
@@ -53,3 +63,11 @@ class AudioConfig:
             raise ValueError("Length of tokens not set")
 
         return ceil(self.length_seconds * self.length_tokens) # type: ignore
+
+@dataclass
+class KMeansClusterConfig:
+    max_iter: int = 150
+    batch_size: int = 10000
+    max_no_improvement: int = 100
+    n_init: int = 20
+    reassignment_ratio: float = 0.5
