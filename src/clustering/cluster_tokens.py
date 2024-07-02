@@ -12,11 +12,11 @@ from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from transformers import AutoFeatureExtractor
 
-from .logger import logger
-from .configs import KMeansClusterConfig, Wav2VecBertConfig
-from .datasets import AudioBatchDataset, batch_generator
-from .utils import get_dataset_files, preprocess_audio
-from .encoder import Wav2VecBertEncoder
+from ..logger import logger
+from ..configs import KMeansClusterConfig, Wav2VecBertConfig
+from ..datasets import AudioBatchDataset, batch_generator
+from ..utils import get_dataset_files, preprocess_audio
+from ..encoder import Wav2VecBertEncoder
 
 def collate_fn(batch):
     segments, attention_masks, file_names = zip(*batch)
