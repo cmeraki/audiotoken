@@ -8,6 +8,17 @@ from .configs import AudioConfig
 from .utils import read_audio
 from .logger import logger
 
+
+def collate_fn(batch):
+    segments, attention_masks, file_names = zip(*batch)
+    return torch.stack(segments), torch.stack(attention_masks), file_names
+
+
+def batch_generator(dataloader):
+    for batch in dataloader:
+        yield batch
+
+
 class AudioBatchDataset(IterableDataset):
     def __init__(
             self,
@@ -16,6 +27,7 @@ class AudioBatchDataset(IterableDataset):
             single_segment_duration: int,
             model_token_rate: int,
             transform=None,
+            pad_token: int = 0,
             overlap: float = 0
         ):
 
@@ -23,6 +35,7 @@ class AudioBatchDataset(IterableDataset):
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
         self.transform = transform
+        self.pad_token = pad_token
 
         self.segment_length = single_segment_duration*sample_rate
         self.stride = int(self.segment_length - overlap * sample_rate)
@@ -75,10 +88,8 @@ class AudioBatchDataset(IterableDataset):
                     if segment.shape[0] < self.segment_length:
                         padded_segment_len = self.segment_length - segment.shape[0]
 
-                        attention_mask = torch.nn.functional.pad(
-                            attention_mask, (0, padded_segment_len), value=0)
-                        segment = torch.nn.functional.pad(
-                            segment, (0, padded_segment_len), value=0)
+                        attention_mask = torch.nn.functional.pad(attention_mask, (0, padded_segment_len), value=self.pad_token)
+                        segment = torch.nn.functional.pad(segment, (0, padded_segment_len), value=self.pad_token)
 
                     yield segment, attention_mask, deepcopy(audio_config)
 
@@ -107,14 +118,6 @@ if __name__ == '__main__':
         single_segment_duration=5,
         model_token_rate=50
     )
-
-    def collate_fn(batch):
-        segments, attention_masks, file_names = zip(*batch)
-        return torch.stack(segments), torch.stack(attention_masks), file_names
-
-    def batch_generator(dataloader):
-        for batch in dataloader:
-            yield batch
 
     dataloader = DataLoader(
         ds,

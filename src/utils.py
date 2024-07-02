@@ -5,6 +5,7 @@ import numpy as np
 import torchaudio
 import numpy as np
 from encodec.utils import convert_audio
+from datasets import load_dataset
 
 from .configs import AudioConfig
 from .logger import logger
@@ -83,3 +84,36 @@ def preprocess_audio(audio, sample_rate, processor):
         sampling_rate=sample_rate,
         return_tensors='pt'
     ).input_values[0]
+
+def get_dataset_files(indir: str, hf_dataset: str):
+    assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
+
+    if indir:
+        if os.path.isdir(indir):
+            files = find_audio_files(indir)
+
+        else:
+            files = [indir]
+
+    else:
+        assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
+
+        ds = load_dataset(
+            hf_dataset,
+            "xs",
+            trust_remote_code=True,
+            token=os.environ.get("HF_TOKEN"),
+        )["train"]
+
+        files = []
+
+        for idx in range(len(ds)):
+            files.append(
+                ds[idx]["audio"]["path"]
+            )
+
+        logger.info(f'Found {len(files)} audio files in the dataset.')
+
+        del (ds)
+
+    return files

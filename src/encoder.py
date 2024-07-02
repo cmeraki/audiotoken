@@ -6,10 +6,10 @@ import numpy as np
 from typing import List, Tuple
 from encodec import EncodecModel
 from huggingface_hub import hf_hub_download
-from transformers import HubertModel, Wav2Vec2FeatureExtractor
+from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor
 
 from .utils import read_audio, preprocess_audio
-from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig
+from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig
 from .logger import logger
 
 class TextEncoder:
@@ -141,6 +141,79 @@ class HubertEncoder:
 
                 return min_dist
 
+
+class Wav2VecBertEncoder:
+    def __init__(
+        self,
+        config: Wav2VecBertConfig,
+        device: str = 'cpu'
+    ):
+
+        model_id = config.model_id
+        self.segment_length = config.model_sample_rate * config.single_segment_duration
+        self.device = torch.device(device)
+
+        self.output_layer = config.output_layer
+
+        self.processor = AutoFeatureExtractor.from_pretrained(model_id)
+        self.model = Wav2Vec2BertModel.from_pretrained(model_id).to(self.device)
+
+        self.model.eval()
+
+        logger.info(f'Ouput layer: {self.output_layer}')
+
+        # K Means model loading
+        """
+        kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
+        self.km = joblib.load(kmeans_path)
+        self.C_np = self.km.cluster_centers_.transpose()
+        self.Cnorm_np = (self.C_np ** 2).sum(0)
+
+        self.C = torch.from_numpy(self.C_np).t().to(self.device)
+        self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+
+        del(self.C_np)
+        del(self.Cnorm_np)
+        """
+
+        if device != 'cpu':
+
+            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
+            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
+
+            self.model = torch.compile(self.model, mode="reduce-overhead")
+
+            # Warmup the model, model expects dimension length to be 160
+            input = torch.randn((1, 64, 160), device=self.device)
+            am = torch.ones((1, 64), device=self.device)
+
+            for _ in range(5):
+                _ = self.model(input, attention_mask=am, output_hidden_states=True)
+
+    def __call__(self, input_batch: List[torch.Tensor], attention_mask: List[torch.Tensor]):
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad():
+                logger.info(f"Batch size: {len(input_batch)}, Attention mask size: {len(attention_mask)}")
+
+                processed = self.processor(
+                    input_batch,
+                    sampling_rate=16_000,
+                    return_attention_masks=True,
+                    return_tensors='pt'
+                )
+
+                logger.info(f'Processed size: {processed.input_features.shape}, {processed.attention_mask.shape}')
+
+                input_features = processed.input_features.to(self.device)
+                attention_mask = processed.attention_mask.to(self.device)
+
+                embeddings = self.model.forward(input_features, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
+
+                logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
+
+                return embeddings
 
 if __name__ == '__main__':
     pass

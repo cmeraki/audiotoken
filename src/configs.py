@@ -67,7 +67,7 @@ class AudioConfig:
 @dataclass
 class KMeansClusterConfig:
     max_iter: int = 150
-    batch_size: int = 10000
+    batch_size: int = 100000
     max_no_improvement: int = 100
     n_init: int = 20
     reassignment_ratio: float = 0.5
