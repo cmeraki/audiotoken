@@ -1,9 +1,9 @@
 import torch
 import tiktoken
 import joblib
-import numpy as np
 
-from typing import List, Tuple
+from pathlib import Path
+from typing import List
 from encodec import EncodecModel
 from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor
 
@@ -167,7 +167,7 @@ class Wav2VecBertEncoder:
         logger.info(f'Ouput layer: {self.output_layer}')
 
         if self.quantize:
-            kmeans_path = Path(config.quantizer_path).resolve() # type: ignore
+            kmeans_path = Path(config.quantizer_path) # type: ignore
 
             self.km = joblib.load(kmeans_path)
             self.C_np = self.km.cluster_centers_.transpose()

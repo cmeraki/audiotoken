@@ -13,12 +13,6 @@ def collate_fn(batch):
     segments, attention_masks, file_names = zip(*batch)
     return torch.stack(segments), torch.stack(attention_masks), file_names
 
-
-def batch_generator(dataloader):
-    for batch in dataloader:
-        yield batch
-
-
 class AudioBatchDataset(IterableDataset):
     def __init__(
             self,
@@ -126,7 +120,7 @@ if __name__ == '__main__':
         num_workers=4
     )
 
-    for segments, attention_masks, file_names in tqdm(batch_generator(dataloader)):
+    for segments, attention_masks, file_names in tqdm(dataloader):
         # pdb.set_trace()
         logger.info(
             f"Files in this batch: {file_names} Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}"
