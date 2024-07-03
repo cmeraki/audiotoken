@@ -5,7 +5,6 @@ import numpy as np
 
 from typing import List, Tuple
 from encodec import EncodecModel
-from huggingface_hub import hf_hub_download
 from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor
 
 from .utils import read_audio, preprocess_audio
@@ -79,6 +78,7 @@ class HubertEncoder:
     def __init__(
         self,
         config: HubertEncoderConfig=HubertEncoderConfig(),
+        quantize: bool = True,
         device: str = 'cpu'
     ):
 
@@ -87,6 +87,7 @@ class HubertEncoder:
         self.segment_length = config.model_sample_rate * config.single_segment_duration
         self.device = torch.device(device)
         self.config = config
+        self.quantize = quantize
 
         self.pad_token = 0
         self.output_layer = 11
@@ -95,16 +96,16 @@ class HubertEncoder:
 
         self.model.eval()
 
-        kmeans_path = hf_hub_download(repo_id=model_id, filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin')
-        self.km = joblib.load(kmeans_path)
-        self.C_np = self.km.cluster_centers_.transpose()
-        self.Cnorm_np = (self.C_np ** 2).sum(0)
+        if self.quantize:
+            self.km = joblib.load(config.quantizer_path)
+            self.C_np = self.km.cluster_centers_.transpose()
+            self.Cnorm_np = (self.C_np ** 2).sum(0)
 
-        self.C = torch.from_numpy(self.C_np).t().to(self.device)
-        self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+            self.C = torch.from_numpy(self.C_np).t().to(self.device)
+            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
 
-        del(self.C_np)
-        del(self.Cnorm_np)
+            del(self.C_np)
+            del(self.Cnorm_np)
 
         if device != 'cpu':
             self.model.to(self.device)
@@ -129,17 +130,19 @@ class HubertEncoder:
 
                 embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
 
-                logger.info(f'Embeddings size: {embeddings.shape}, C size: {self.C.shape}, dtype: {embeddings.dtype}')
+                logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
-                # Compute L2 norm
-                distances = torch.cdist(embeddings, self.C)  # (B, T, K)
-                min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
+                if self.quantize:
+                    # Compute L2 norm
+                    distances = torch.cdist(embeddings, self.C)  # (B, T, K)
+                    min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
 
-                min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
-                logger.info(f'Min dist size: {min_dist.shape}')
+                    min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                    logger.info(f'Min dist size: {min_dist.shape}')
 
-                return min_dist
+                    return min_dist
 
+                return embeddings
 
 class Wav2VecBertEncoder:
     def __init__(
@@ -164,7 +167,7 @@ class Wav2VecBertEncoder:
         logger.info(f'Ouput layer: {self.output_layer}')
 
         if self.quantize:
-            kmeans_path = Path('./data/kmeans/kmeans__L-1_C1024_ckpt10.pkl').resolve()
+            kmeans_path = Path(config.quantizer_path).resolve() # type: ignore
 
             self.km = joblib.load(kmeans_path)
             self.C_np = self.km.cluster_centers_.transpose()

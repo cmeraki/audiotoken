@@ -2,6 +2,8 @@ from math import ceil
 from typing import Optional
 from dataclasses import dataclass
 
+from huggingface_hub import hf_hub_download
+
 @dataclass
 class VoiceEncoderConfig:
     model_sample_rate: int = 24_000
@@ -23,7 +25,10 @@ class HubertEncoderConfig:
     overlap: float = 0
     batch_size: int = 64
     model_token_rate: int = 50
-
+    quantizer_path: Optional[str] = hf_hub_download(
+        repo_id=model_id,
+        filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
+    )
 
 @dataclass
 class Wav2VecBertConfig:
@@ -32,7 +37,7 @@ class Wav2VecBertConfig:
     single_segment_duration: int = 10
     model_token_rate: int = 50
     output_layer: int = -1
-
+    quantizer_path: Optional[str] = '../data/kmeans/kmeans__L-1_C1024_ckpt150.pkl'
 
 @dataclass
 class AudioConfig:
@@ -67,7 +72,7 @@ class AudioConfig:
 @dataclass
 class KMeansClusterConfig:
     max_iter: int = 150
-    batch_size: int = 100000
+    batch_size: int = 10000
     max_no_improvement: int = 100
     n_init: int = 20
     reassignment_ratio: float = 0.5
