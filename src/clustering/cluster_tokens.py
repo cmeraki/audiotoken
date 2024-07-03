@@ -65,6 +65,12 @@ def get_parser():
         default=16,
     )
     parser.add_argument(
+        "--epochs",
+        type=int,
+        help="Number of epochs for k-means training",
+        default=10,
+    )
+    parser.add_argument(
         '--device',
         type=str,
         default='cpu',
@@ -74,7 +80,7 @@ def get_parser():
     return parser
 
 
-def get_kmeans_batch(dataset, encoder, device, max_size=1000):
+def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -85,29 +91,33 @@ def get_kmeans_batch(dataset, encoder, device, max_size=1000):
         pin_memory=True
     )
 
-    features_batch = []
     batch_size = 0
-
+    features_batch = []
     start_time = time.time()
 
-    for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
-        logger.info(f'Processing batch: {idx}')
+    for e in tqdm(range(epochs)):
 
-        input_ids = input_ids
-        attention_masks = attention_masks
+        logger.info(f"Starting epoch: {e}")
 
-        encoded_audio = encoder(input_ids, attention_masks) # B, T, D
-        B, T, D = encoded_audio.shape
-        encoded_audio = encoded_audio.cpu().numpy().reshape(B*T, D)  # B*T, D
-        features_batch.append(encoded_audio)
-        batch_size += B*T
+        for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
+            logger.info(f'Processing batch: {idx}')
 
-        if batch_size >= max_size:
-            logger.info(f"Yielding batch of size {batch_size}")
-            logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
-            yield np.concatenate(features_batch, axis=0), batch_size
-            start_time = time.time()
-            batch_size = 0
+            input_ids = input_ids
+            attention_masks = attention_masks
+
+            encoded_audio = encoder(input_ids, attention_masks) # B, T, D
+            B, T, D = encoded_audio.shape
+            encoded_audio = encoded_audio.cpu().numpy().reshape(B*T, D)  # B*T, D
+            features_batch.append(encoded_audio)
+            batch_size += B*T
+
+            if batch_size >= max_size:
+                logger.info(f"Yielding batch of size {batch_size}")
+                logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
+                yield np.concatenate(features_batch, axis=0), batch_size
+                start_time = time.time()
+                batch_size = 0
+                features_batch = []
 
     if batch_size > 0:
         logger.info(f"Yielding batch of size {batch_size}")
@@ -177,13 +187,13 @@ def main(args):
     total_batches = 0
 
     # Iterate and train the k-means model batch by batch
-    for idx, (kmeans_batch, batch_size) in tqdm(
-        enumerate(get_kmeans_batch(
+    for idx, (kmeans_batch, batch_size) in enumerate(
+        get_kmeans_batch(
             dataset=dataset,
             encoder=encoder,
-            device=args.device,
-            max_size=KMeansClusterConfig.batch_size # This data will be stored in the memory
-        ))
+            epochs=args.epochs,
+            max_size=KMeansClusterConfig.batch_size
+        )
     ):
         quantizer = train_kmeans(kmeans_model, kmeans_batch)
         total_batches += batch_size
