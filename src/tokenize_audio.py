@@ -11,11 +11,6 @@ from .utils import find_audio_files, save_audio_tokens, preprocess_audio
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
-"""
-def collate_fn(batch):
-    segments, attention_masks, file_names = zip(*batch)
-    return [s for s in segments], [a for a in attention_masks], file_names
-"""
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -129,18 +124,14 @@ if __name__ == '__main__':
 
     elif args.tokenizer == 'hubert':
         from transformers import Wav2Vec2FeatureExtractor
-        from .encoder import HubertEncoder
+        from .encoder import HubertEncoder, hubert_processor
         from .configs import HubertEncoderConfig
 
         encoder = HubertEncoder(device=DEVICE) # type: ignore
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
-        tranform_func = partial(
-            preprocess_audio,
-            sample_rate=HubertEncoderConfig.model_sample_rate,
-            processor=processor
-        )
+        tranform_func = partial(hubert_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
@@ -151,8 +142,9 @@ if __name__ == '__main__':
         )
 
     elif args.tokenizer == 'wav2vec2':
-        from .encoder import Wav2VecBertEncoder
-        from .configs import Wav2VecBertConfig 
+        from transformers import AutoFeatureExtractor
+        from .encoder import Wav2VecBertEncoder, wav2vec2_processor
+        from .configs import Wav2VecBertConfig
 
         encoder = Wav2VecBertEncoder( # type: ignore
             config=Wav2VecBertConfig(quantizer_path='data/kmeans/kmeans__L-1_C1024_ckpt150.pkl'),
@@ -160,10 +152,14 @@ if __name__ == '__main__':
             device=DEVICE
         )
 
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+        post_transform_func = partial(wav2vec2_processor, processor=processor)
+
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            post_transform=post_transform_func,
             model_token_rate=Wav2VecBertConfig.model_token_rate
         )
 

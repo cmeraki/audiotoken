@@ -11,6 +11,26 @@ from .utils import read_audio, preprocess_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig
 from .logger import logger
 
+
+def wav2vec2_processor(audio, processor):
+
+    return processor(
+        audio,
+        sampling_rate=Wav2VecBertConfig.model_sample_rate,
+        return_attention_masks=True,
+        return_tensors='pt'
+    )
+
+
+def hubert_processor(audio, processor):
+
+    return processor(
+        audio,
+        sampling_rate=HubertEncoderConfig.model_sample_rate,
+        return_tensors='pt'
+    ).input_values[0]
+
+
 class TextEncoder:
     """
     Simple wrapper around the TikToken encoder to encode a list of strings
@@ -158,7 +178,6 @@ class Wav2VecBertEncoder:
 
         self.output_layer = config.output_layer
 
-        self.processor = AutoFeatureExtractor.from_pretrained(model_id)
         self.model = Wav2Vec2BertModel.from_pretrained(model_id).to(self.device)
         self.quantize = quantize
 
@@ -195,24 +214,12 @@ class Wav2VecBertEncoder:
             for _ in range(5):
                 _ = self.model(input, attention_mask=am, output_hidden_states=True)
 
-    def __call__(self, input_batch: List[torch.Tensor], attention_mask: List[torch.Tensor]):
+    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
-                logger.info(f"Batch size: {len(input_batch)}, Attention mask size: {len(attention_mask)}")
+                logger.info(f"Batch size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
 
-                processed = self.processor(
-                    input_batch,
-                    sampling_rate=16_000,
-                    return_attention_masks=True,
-                    return_tensors='pt'
-                )
-
-                logger.info(f'Processed size: {processed.input_features.shape}, {processed.attention_mask.shape}')
-
-                input_features = processed.input_features.to(self.device)
-                attention_mask = processed.attention_mask.to(self.device)
-
-                embeddings = self.model.forward(input_features, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
 
                 logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
@@ -292,7 +299,8 @@ if __name__ == '__main__':
 
         for p in audio_file_paths:
             a = read_audio(Path(p).expanduser(), 16_000)
-            a = preprocess_audio(a, 16_000, processor)
+            a = hubert_processor(a, processor)
+
             audio_files.append((
                 a,
                 AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
@@ -318,8 +326,12 @@ if __name__ == '__main__':
     elif args.tokenizer == 'wav2vec':
         print(f'Encoding using wav2vec')
 
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+
         for p in audio_file_paths:
             a = read_audio(Path(p).expanduser(), 16_000)
+            a = wav2vec2_processor(a, processor)
+
             audio_files.append((
                 a,
                 AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
@@ -334,7 +346,10 @@ if __name__ == '__main__':
         start_time = time()
 
         for audio, audio_config in audio_files:
-            encoded = wav2vec_encoder([audio], [torch.ones_like(audio)])
+            audio = audio.to(device)
+            am = torch.ones_like(audio, device=device)
+
+            encoded = wav2vec_encoder(audio, am)
             print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
 
