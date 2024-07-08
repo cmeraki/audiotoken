@@ -79,8 +79,7 @@ class AudioBatchDataset(IterableDataset):
                 # will take in the audio and produce (N, D) tensor where N 
                 # is the number od tokens and D is the dimension of the token
                 if self.post_transform:
-                    post = self.post_transform(waveform)
-                    input_ids, attention_mask = post.input_features[0], post.attention_mask[0]
+                    input_ids, attention_mask = self.post_transform(waveform)
                     stride = self.model_token_rate * self.single_segment_duration
 
                     idx = 0
@@ -130,7 +129,7 @@ if __name__ == '__main__':
     from functools import partial
     from transformers import AutoFeatureExtractor
 
-    from .encoder import wav2vec2_processor
+    from .encoder import wav2vec_processor
     from .configs import Wav2VecBertConfig
 
     parser = ArgumentParser()
@@ -141,7 +140,7 @@ if __name__ == '__main__':
 
 
     processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-    post_transform_func = partial(wav2vec2_processor, processor=processor)
+    post_transform_func = partial(wav2vec_processor, processor=processor)
 
     ds = AudioBatchDataset(
         audio_files=fns,

@@ -12,14 +12,16 @@ from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2V
 from .logger import logger
 
 
-def wav2vec2_processor(audio, processor):
+def wav2vec_processor(audio, processor):
 
-    return processor(
+    proc = processor(
         audio,
         sampling_rate=Wav2VecBertConfig.model_sample_rate,
         return_attention_masks=True,
         return_tensors='pt'
     )
+
+    return proc.input_features, proc.attention_mask
 
 
 def hubert_processor(audio, processor):
@@ -241,8 +243,10 @@ if __name__ == '__main__':
     """
     import os
     from time import time
+    from tqdm import tqdm
     from pathlib import Path
     from argparse import ArgumentParser
+
     from .configs import VoiceEncoderConfig
     from .utils import find_audio_files, save_audio_tokens
 
@@ -265,14 +269,6 @@ if __name__ == '__main__':
 
     if args.tokenizer == 'encodec':
         print(f'Encoding using encodec')
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
-            ))
-
         voice_encoder = VoiceEncoder(
             bandwidth=VoiceEncoderConfig.bandwidth,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
@@ -281,13 +277,13 @@ if __name__ == '__main__':
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
 
-            encoded = voice_encoder(audio, torch.ones_like(audio))
+            encoded = voice_encoder(a.to(device), torch.ones_like(a, device=device))
             print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
-
 
         print(f'Encodec encoding took {time() - start_time:.2f}s')
 
@@ -296,16 +292,6 @@ if __name__ == '__main__':
 
         from transformers import Wav2Vec2FeatureExtractor
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), 16_000)
-            a = hubert_processor(a, processor)
-
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
-            ))
-
         hubert_encoder = HubertEncoder(
             config=HubertEncoderConfig(),
             device=device
@@ -313,11 +299,14 @@ if __name__ == '__main__':
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
-            am = torch.ones_like(audio, device=device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), 16_000)
+            a = hubert_processor(a, processor)
+            am = torch.ones_like(a, device=device)
 
-            encoded = hubert_encoder(audio, am)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+
+            encoded = hubert_encoder(a.to(device), am)
             print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
 
@@ -327,16 +316,6 @@ if __name__ == '__main__':
         print(f'Encoding using wav2vec')
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), 16_000)
-            a = wav2vec2_processor(a, processor)
-
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
-            ))
-
         wav2vec_encoder = Wav2VecBertEncoder(
             config=Wav2VecBertConfig(),
             quantize=True,
@@ -345,12 +324,18 @@ if __name__ == '__main__':
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
-            am = torch.ones_like(audio, device=device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), 16_000)
+            i, am = wav2vec_processor(a, processor)
 
-            encoded = wav2vec_encoder(audio, am)
-            print(encoded.shape)
+            audio_config = AudioConfig(
+                file_name=p,
+                length_seconds=i.shape[-1],
+                length_samples=i.shape[-1] * 16_000,
+                length_tokens=50
+            )
+
+            encoded = wav2vec_encoder(i.to(device), am.to(device))
             save_audio_tokens(encoded, audio_config, args.outdir)
 
         print(f'Wav2Vec encoding took {time() - start_time:.2f}s')
