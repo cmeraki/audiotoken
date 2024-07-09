@@ -27,7 +27,7 @@ def get_logger(log_file="app.log", level: str = "INFO"):
     logger.add(
         log_file,
         format=format,
-        rotation="100 MB",
+        rotation="10 MB",
         retention="1 week",
         level=level,
         enqueue=True,

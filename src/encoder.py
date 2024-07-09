@@ -7,19 +7,26 @@ from typing import List
 from encodec import EncodecModel
 from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor
 
-from .utils import read_audio, preprocess_audio
+from .utils import read_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig
 from .logger import logger
 
 
-def wav2vec2_processor(audio, processor):
+torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
+# torch.backends.cudnn.benchmark = True  # Selects the best conv algo
 
-    return processor(
+def wav2vec_processor(audio, processor):
+
+    proc = processor(
         audio,
         sampling_rate=Wav2VecBertConfig.model_sample_rate,
         return_attention_masks=True,
         return_tensors='pt'
     )
+
+    return proc.input_features, proc.attention_mask
 
 
 def hubert_processor(audio, processor):
@@ -51,10 +58,12 @@ class VoiceEncoder:
             self,
             bandwidth: float,
             single_segment_duration: int,
-            device: str = 'cpu'
+            device: str = 'cpu',
+            compile: bool = True
         ):
 
         self.model = EncodecModel.encodec_model_24khz()
+        self.model.to(device)
         self.model.set_target_bandwidth(bandwidth)
 
         self.device = torch.device(device)
@@ -62,14 +71,7 @@ class VoiceEncoder:
 
         self.model.eval()
 
-        if device != 'cpu':
-            self.model = self.model.to(device)
-
-            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
-            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
+        if compile:
             self.model = torch.compile(self.model, mode="reduce-overhead")
 
             # Warmup the model
@@ -99,7 +101,8 @@ class HubertEncoder:
         self,
         config: HubertEncoderConfig=HubertEncoderConfig(),
         quantize: bool = True,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        compile: bool = True
     ):
 
         model_id = config.model_id
@@ -112,7 +115,7 @@ class HubertEncoder:
         self.pad_token = 0
         self.output_layer = 11
 
-        self.model = HubertModel.from_pretrained(model_id)#,attn_implementation="flash_attention_2", torch_dtype=torch.float16)
+        self.model = HubertModel.from_pretrained(model_id).to(self.device)
 
         self.model.eval()
 
@@ -127,15 +130,8 @@ class HubertEncoder:
             del(self.C_np)
             del(self.Cnorm_np)
 
-        if device != 'cpu':
-            self.model.to(self.device)
-
-            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
-            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
-            self.model = torch.compile(self.model, mode="reduce-overhead")
+        if compile:
+            self.model = torch.compile(self.model)
 
             # warmup the model
             input = torch.randn((self.batch_size, 16000), device=self.device)#, dtype=torch.float16)
@@ -164,12 +160,14 @@ class HubertEncoder:
 
                 return embeddings
 
+
 class Wav2VecBertEncoder:
     def __init__(
         self,
         config: Wav2VecBertConfig,
         quantize: bool = False,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        compile: bool = True
     ):
 
         model_id = config.model_id
@@ -198,14 +196,8 @@ class Wav2VecBertEncoder:
             del(self.C_np)
             del(self.Cnorm_np)
 
-        if device != 'cpu':
-
-            torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-            torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-            torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
-            # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
-            self.model = torch.compile(self.model, mode="reduce-overhead")
+        if compile:
+            self.model = torch.compile(self.model)
 
             # Warmup the model, model expects dimension length to be 160
             input = torch.randn((1, 64, 160), device=self.device)
@@ -219,11 +211,13 @@ class Wav2VecBertEncoder:
             with torch.no_grad():
                 logger.info(f"Batch size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
 
-                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
 
-                logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
+                # logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
                 if self.quantize:
+                    embeddings = embeddings[self.output_layer]  # B, T, D
+
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                     min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
@@ -235,14 +229,17 @@ class Wav2VecBertEncoder:
 
                 return embeddings
 
+
 if __name__ == '__main__':
     """
     python -m src.encoder --tokenizer encodec --indir /path/to/audio/files --outdir /path/to/output/directory
     """
     import os
     from time import time
+    from tqdm import tqdm
     from pathlib import Path
     from argparse import ArgumentParser
+
     from .configs import VoiceEncoderConfig
     from .utils import find_audio_files, save_audio_tokens
 
@@ -255,7 +252,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     audio_file_paths = find_audio_files(args.indir)
-    audio_files = []
 
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -265,29 +261,22 @@ if __name__ == '__main__':
 
     if args.tokenizer == 'encodec':
         print(f'Encoding using encodec')
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
-            ))
-
         voice_encoder = VoiceEncoder(
             bandwidth=VoiceEncoderConfig.bandwidth,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            device=device
+            device=device,
+            compile=False
         )
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
 
-            encoded = voice_encoder(audio, torch.ones_like(audio))
+            encoded = voice_encoder(a.to(device), torch.ones_like(a, device=device))
             print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
-
 
         print(f'Encodec encoding took {time() - start_time:.2f}s')
 
@@ -296,28 +285,22 @@ if __name__ == '__main__':
 
         from transformers import Wav2Vec2FeatureExtractor
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), 16_000)
-            a = hubert_processor(a, processor)
-
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
-            ))
-
         hubert_encoder = HubertEncoder(
             config=HubertEncoderConfig(),
-            device=device
+            device=device,
+            compile=False
         )
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
-            am = torch.ones_like(audio, device=device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), 16_000)
+            a = hubert_processor(a, processor)
+            am = torch.ones_like(a, device=device)
 
-            encoded = hubert_encoder(audio, am)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+
+            encoded = hubert_encoder(a.to(device), am)
             print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
 
@@ -327,30 +310,27 @@ if __name__ == '__main__':
         print(f'Encoding using wav2vec')
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-
-        for p in audio_file_paths:
-            a = read_audio(Path(p).expanduser(), 16_000)
-            a = wav2vec2_processor(a, processor)
-
-            audio_files.append((
-                a,
-                AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
-            ))
-
         wav2vec_encoder = Wav2VecBertEncoder(
             config=Wav2VecBertConfig(),
             quantize=True,
-            device=device
+            device=device,
+            compile=False
         )
 
         start_time = time()
 
-        for audio, audio_config in audio_files:
-            audio = audio.to(device)
-            am = torch.ones_like(audio, device=device)
+        for p in tqdm(audio_file_paths):
+            a = read_audio(Path(p).expanduser(), 16_000)
+            i, am = wav2vec_processor(a, processor)
 
-            encoded = wav2vec_encoder(audio, am)
-            print(encoded.shape)
+            audio_config = AudioConfig(
+                file_name=p,
+                length_seconds=i.shape[-1],
+                length_samples=i.shape[-1] * 16_000,
+                length_tokens=50
+            )
+
+            encoded = wav2vec_encoder(i.to(device), am.to(device))
             save_audio_tokens(encoded, audio_config, args.outdir)
 
         print(f'Wav2Vec encoding took {time() - start_time:.2f}s')

@@ -7,7 +7,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens, preprocess_audio
+from .utils import find_audio_files, save_audio_tokens
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
@@ -143,7 +143,7 @@ if __name__ == '__main__':
 
     elif args.tokenizer == 'wav2vec2':
         from transformers import AutoFeatureExtractor
-        from .encoder import Wav2VecBertEncoder, wav2vec2_processor
+        from .encoder import Wav2VecBertEncoder, wav2vec_processor
         from .configs import Wav2VecBertConfig
 
         encoder = Wav2VecBertEncoder( # type: ignore
@@ -153,7 +153,7 @@ if __name__ == '__main__':
         )
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(wav2vec2_processor, processor=processor)
+        post_transform_func = partial(wav2vec_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,

@@ -37,7 +37,7 @@ class Wav2VecBertConfig:
     single_segment_duration: int = 10
     model_token_rate: int = 50
     output_layer: int = -1
-    quantizer_path: Optional[str] = '../data/kmeans/kmeans__L-1_C1024_ckpt150.pkl'
+    quantizer_path: Optional[str] = 'data/kmeans_xs/kmeans__L-1_C1024_ckpt150.pkl'
 
 @dataclass
 class AudioConfig:
