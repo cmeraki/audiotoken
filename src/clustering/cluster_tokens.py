@@ -7,19 +7,17 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 import psutil
+from functools import partial
+from transformers import AutoFeatureExtractor
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 
 from ..logger import logger
 from ..configs import KMeansClusterConfig, Wav2VecBertConfig
-from ..datasets import AudioBatchDataset
+from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import get_dataset_files, set_process_affinity
-from ..encoder import Wav2VecBertEncoder
-
-def collate_fn(batch):
-    segments, attention_masks, file_names = zip(*batch)
-    return [s for s in segments], [a for a in attention_masks], file_names
+from ..encoder import Wav2VecBertEncoder, wav2vec2_processor
 
 
 def get_parser():
@@ -91,38 +89,52 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
         pin_memory=True
     )
 
-    batch_size = 0
-    features_batch = []
+    layers = [15, 18, 21]
+    accumulated_batch_size = 0
+    features_batch = {
+        15: [],
+        18: [],
+        21: []
+    }
     start_time = time.time()
 
     for e in tqdm(range(epochs)):
 
         logger.info(f"Starting epoch: {e}")
 
-        for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
+        for idx, (input_ids, attention_masks, _) in tqdm(enumerate(dataloader)):
             logger.info(f'Processing batch: {idx}')
 
-            input_ids = input_ids
-            attention_masks = attention_masks
+            input_ids = input_ids.to(DEVICE)
+            attention_masks = attention_masks.to(DEVICE)
 
-            encoded_audio = encoder(input_ids, attention_masks) # B, T, D
-            B, T, D = encoded_audio.shape
-            encoded_audio = encoded_audio.cpu().numpy().reshape(B*T, D)  # B*T, D
-            features_batch.append(encoded_audio)
-            batch_size += B*T
+            encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
 
-            if batch_size >= max_size:
-                logger.info(f"Yielding batch of size {batch_size}")
+            for l in layers:
+                single_layer = encoded_audio[l]
+                logger.info(f"Layer: {single_layer.shape}")
+                B, T, D = single_layer.shape
+                single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
+                features_batch[l].append(single_layer)
+
+            accumulated_batch_size += B*T
+
+            if accumulated_batch_size >= max_size:
+                logger.info(f"Yielding batch of size {accumulated_batch_size}")
                 logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
-                yield np.concatenate(features_batch, axis=0), batch_size
+                yield features_batch, accumulated_batch_size
                 start_time = time.time()
-                batch_size = 0
-                features_batch = []
+                accumulated_batch_size = 0
+                features_batch = {
+                    15: [],
+                    18: [],
+                    21: []
+                }
 
-    if batch_size > 0:
-        logger.info(f"Yielding batch of size {batch_size}")
+    if accumulated_batch_size > 0:
+        logger.info(f"Yielding batch of size {accumulated_batch_size}")
         logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
-        yield np.concatenate(features_batch, axis=0), batch_size
+        yield features_batch, accumulated_batch_size
 
 
 def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
@@ -155,6 +167,9 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
 
 def main(args):
 
+    global DEVICE
+    DEVICE = args.device
+
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
@@ -164,11 +179,15 @@ def main(args):
     os.makedirs(out_kmeans_model_path, exist_ok=True)
 
     # Create the dataset and the dataloader
-    wav2vecbert_config:Wav2VecBertConfig = Wav2VecBertConfig(output_layer=args.layer)
+    wav2vecbert_config:Wav2VecBertConfig = Wav2VecBertConfig(output_layer=args.layer) # type:ignore
+
+    processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+    post_transform_func = partial(wav2vec2_processor, processor=processor)
 
     dataset = AudioBatchDataset(
         files,
         sample_rate=Wav2VecBertConfig.model_sample_rate,
+        post_transform=post_transform_func,
         single_segment_duration=Wav2VecBertConfig.single_segment_duration,
         model_token_rate=Wav2VecBertConfig.model_token_rate,
     )
@@ -185,6 +204,20 @@ def main(args):
         config=KMeansClusterConfig,
     )
     total_batches = 0
+    quantizers = {
+        15: get_kmeans_model(
+            n_clusters=args.num_clusters,
+            config=KMeansClusterConfig,
+        ),
+        18: get_kmeans_model(
+            n_clusters=args.num_clusters,
+            config=KMeansClusterConfig,
+        ),
+        21: get_kmeans_model(
+            n_clusters=args.num_clusters,
+            config=KMeansClusterConfig,
+        )
+    }
 
     # Iterate and train the k-means model batch by batch
     for idx, (kmeans_batch, batch_size) in enumerate(
@@ -195,23 +228,26 @@ def main(args):
             max_size=KMeansClusterConfig.batch_size
         )
     ):
-        quantizer = train_kmeans(kmeans_model, kmeans_batch)
+        for k, v in kmeans_batch.items():
+            kmeans_batch[k] = np.concatenate(v, axis=0)
+            quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
+
+            if idx % 50 == 0:
+                ckpt_name = f"kmeans__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
+                save_path = os.path.join(args.outdir, ckpt_name)
+                logger.info(f'Saving k-means model to {save_path}')
+
+                with open(save_path, "wb+") as f:
+                    joblib.dump(quantizers[k], f)
+
         total_batches += batch_size
-
-        if idx % 10 == 0:
-            ckpt_name = f"kmeans__L{args.layer}_C{args.num_clusters}_ckpt{idx}.pkl"
-            save_path = os.path.join(args.outdir, ckpt_name)
-            logger.info(f'Saving k-means model to {save_path}')
-
-            with open(save_path, "wb+") as f:
-                joblib.dump(quantizer, f)
 
 if __name__ == "__main__":
     """
     python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --layer -1 --device cuda
     """
 
-    set_process_affinity(os.getpid(), [p for p in range(12)])
+    set_process_affinity(os.getpid(), [p for p in range(16)])
 
     parser = get_parser()
     args = parser.parse_args()
