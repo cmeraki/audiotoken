@@ -115,7 +115,7 @@ class HubertEncoder:
         self.pad_token = 0
         self.output_layer = 11
 
-        self.model = HubertModel.from_pretrained(model_id ,attn_implementation="flash_attention_2").to(self.device)
+        self.model = HubertModel.from_pretrained(model_id).to(self.device)
 
         self.model.eval()
 
@@ -211,11 +211,13 @@ class Wav2VecBertEncoder:
             with torch.no_grad():
                 logger.info(f"Batch size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
 
-                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states#[self.output_layer] # B, T, D
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
 
                 # logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
                 if self.quantize:
+                    embeddings = embeddings[self.output_layer]  # B, T, D
+
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                     min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
