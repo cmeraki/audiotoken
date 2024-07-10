@@ -185,16 +185,11 @@ class Wav2VecBertEncoder:
 
         if self.quantize:
             kmeans_path = Path(config.quantizer_path) # type: ignore
+            km = joblib.load(kmeans_path)
 
-            self.km = joblib.load(kmeans_path)
-            self.C_np = self.km.cluster_centers_.transpose()
-            self.Cnorm_np = (self.C_np ** 2).sum(0)
+            self.C = torch.from_numpy(km.cluster_centers_).to(self.device)
 
-            self.C = torch.from_numpy(self.C_np).t().to(self.device)
-            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
-
-            del(self.C_np)
-            del(self.Cnorm_np)
+            del(km)
 
         if compile:
             self.model = torch.compile(self.model)
@@ -205,6 +200,9 @@ class Wav2VecBertEncoder:
 
             for _ in range(5):
                 _ = self.model(input, attention_mask=am, output_hidden_states=True)
+
+            del(input)
+            del(am)
 
     def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):

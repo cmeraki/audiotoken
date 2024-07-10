@@ -7,7 +7,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens
+from .utils import find_audio_files, save_audio_tokens, get_dataset_files
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
@@ -19,7 +19,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=6,
         prefetch_factor=2,
         pin_memory=True
     )
@@ -75,35 +75,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    assert args.indir or args.hf_dataset, "Either hf_dataset or indir must be provided"
-
-    if args.indir:
-        if os.path.isdir(args.indir):
-            files = find_audio_files(args.indir)
-
-        else:
-            files = [args.indir]
-
-    else:
-        assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
-
-        ds = load_dataset(
-            args.hf_dataset,
-            "xs",
-            trust_remote_code=True,
-            token=os.environ.get("HF_TOKEN"),
-        )["train"]
-
-        files = []
-
-        for idx in range(len(ds)):
-            files.append(
-                ds[idx]["audio"]["path"]
-            )
-
-        logger.info(f'Found {len(files)} audio files in the dataset.')
-
-        del (ds)
+    files = get_dataset_files(args.indir, args.hf_dataset)
+    logger.info(f'Found {len(files)} audio files in the dataset.')
 
     if args.tokenizer == 'encodec':
         from .encoder import VoiceEncoder
@@ -147,7 +120,7 @@ if __name__ == '__main__':
         from .configs import Wav2VecBertConfig
 
         encoder = Wav2VecBertEncoder( # type: ignore
-            config=Wav2VecBertConfig(quantizer_path='data/kmeans/kmeans__L-1_C1024_ckpt150.pkl'),
+            config=Wav2VecBertConfig(),
             quantize=True,
             device=DEVICE
         )

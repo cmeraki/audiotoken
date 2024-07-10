@@ -5,6 +5,7 @@ import psutil
 import numpy as np
 import torchaudio
 import numpy as np
+from tqdm import tqdm
 from encodec.utils import convert_audio
 from datasets import load_dataset
 
@@ -91,31 +92,27 @@ def get_dataset_files(indir: str, hf_dataset: str):
 
     if indir:
         if os.path.isdir(indir):
-            files = find_audio_files(indir)
+            return find_audio_files(indir)
 
-        else:
-            files = [indir]
+        return [indir]
 
-    else:
-        assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
+    assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
 
-        ds = load_dataset(
-            hf_dataset,
-            "xs",
-            trust_remote_code=True,
-            token=os.environ.get("HF_TOKEN"),
-        )["train"]
+    files = []
 
-        files = []
+    ds = load_dataset(
+        hf_dataset,
+        "s",
+        trust_remote_code=True,
+        token=os.environ.get("HF_TOKEN"),
+    )["train"]
 
-        for idx in range(len(ds)):
-            files.append(
-                ds[idx]["audio"]["path"]
-            )
+    for idx in tqdm(range(len(ds))):
+        files.append(
+            ds[idx]["audio"]["path"]
+        )
 
-        logger.info(f'Found {len(files)} audio files in the dataset.')
-
-        del (ds)
+    del (ds)
 
     return files
 
