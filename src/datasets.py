@@ -80,6 +80,7 @@ class AudioBatchDataset(IterableDataset):
                 # is the number od tokens and D is the dimension of the token
                 if self.post_transform:
                     input_ids, attention_mask = self.post_transform(waveform)
+                    input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
                     stride = self.model_token_rate * self.single_segment_duration
 
                     idx = 0
