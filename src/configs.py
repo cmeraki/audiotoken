@@ -40,6 +40,15 @@ class Wav2VecBertConfig:
     quantizer_path: Optional[str] = 'data/kmeans_xs/kmeans__L-1_C1024_ckpt150.pkl'
 
 @dataclass
+class WhisperEncoderConfig:
+    model_id: str = 'openai/whisper-tiny'
+    model_sample_rate: int = 16_000
+    single_segment_duration: int = 10
+    model_token_rate: int = None #TODO: Figure out model token rate
+    output_layer: int = -1
+    quantizer_path: Optional[str] = ''
+
+@dataclass
 class AudioConfig:
     """
     Metadata for audio files

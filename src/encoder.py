@@ -5,7 +5,7 @@ import joblib
 from pathlib import Path
 from typing import List
 from encodec import EncodecModel
-from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor
+from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor, WhisperProcessor, WhisperForConditionalGeneration
 
 from .utils import read_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig
@@ -52,6 +52,7 @@ class TextEncoder:
             x,
             num_threads=self.num_threads
         )
+
 
 class VoiceEncoder:
     def __init__(
@@ -226,6 +227,74 @@ class Wav2VecBertEncoder:
                     return min_dist
 
                 return embeddings
+
+
+class WhisperEncoder:
+    def __init__(
+        self,
+        config: Wav2VecBertConfig,
+        quantize: bool = False,
+        device: str = 'cpu',
+        compile: bool = True
+    ):
+
+        model_id = config.model_id
+        self.segment_length = config.model_sample_rate * config.single_segment_duration
+        self.device = torch.device(device)
+
+        self.output_layer = config.output_layer
+
+        self.model = WhisperForConditionalGeneration.from_pretrained(model_id).to(self.device)
+        self.quantize = quantize
+
+        self.model.eval()
+
+        logger.info(f'Ouput layer: {self.output_layer}')
+
+        if self.quantize:
+            kmeans_path = Path(config.quantizer_path) # type: ignore
+            km = joblib.load(kmeans_path)
+
+            self.C = torch.from_numpy(km.cluster_centers_).to(self.device)
+
+            del(km)
+
+        if compile:
+            self.model = torch.compile(self.model)
+
+            # Warmup the model, model expects dimension length to be 160
+            input = torch.randn((1, 64, 160), device=self.device)
+            am = torch.ones((1, 64), device=self.device)
+
+            for _ in range(5):
+                _ = self.model(input, attention_mask=am, output_hidden_states=True)
+
+            del(input)
+            del(am)
+
+    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad():
+                logger.info(f"Batch size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
+
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
+
+                # logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
+
+                if self.quantize:
+                    embeddings = embeddings[self.output_layer]  # B, T, D
+
+                    # Compute L2 norm
+                    distances = torch.cdist(embeddings, self.C)  # (B, T, K)
+                    min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
+
+                    min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                    logger.info(f'Min dist size: {min_dist.shape}')
+
+                    return min_dist
+
+                return embeddings
+
 
 
 if __name__ == '__main__':
