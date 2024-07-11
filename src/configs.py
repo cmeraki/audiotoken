@@ -12,6 +12,7 @@ class VoiceEncoderConfig:
     overlap: float = 0
     batch_size: int = 64
     model_token_rate: int = 75
+    pad_token: Optional[int] = 0
 
 @dataclass
 class VoiceDecoderConfig(VoiceEncoderConfig):
@@ -29,6 +30,7 @@ class HubertEncoderConfig:
         repo_id=model_id,
         filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
     )
+    pad_token: Optional[int] = 0
 
 @dataclass
 class Wav2VecBertConfig:
@@ -38,15 +40,17 @@ class Wav2VecBertConfig:
     model_token_rate: int = 50
     output_layer: int = -1
     quantizer_path: Optional[str] = 'data/kmeans_xs/kmeans__L-1_C1024_ckpt150.pkl'
+    pad_token: Optional[int] = 1
 
 @dataclass
 class WhisperEncoderConfig:
     model_id: str = 'openai/whisper-tiny'
     model_sample_rate: int = 16_000
-    single_segment_duration: int = 10
-    model_token_rate: int = None #TODO: Figure out model token rate
+    single_segment_duration: int = 30 # Whisper converts the audio to images of mel spectrograms
+    model_token_rate: int = 100 # Whisper has a fixed token rate
     output_layer: int = -1
     quantizer_path: Optional[str] = ''
+    pad_token: Optional[int] = None
 
 @dataclass
 class AudioConfig:

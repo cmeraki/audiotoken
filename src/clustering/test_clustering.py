@@ -9,11 +9,11 @@ import torch.nn.functional as F
 from time import time
 
 import matplotlib.pyplot as plt
-from transformers import Wav2Vec2FeatureExtractor, AutoFeatureExtractor
+from transformers import Wav2Vec2FeatureExtractor, AutoFeatureExtractor, WhisperFeatureExtractor
 
 from src.utils import read_audio, find_files
-from src.encoder import Wav2VecBertEncoder, HubertEncoder, wav2vec_processor, hubert_processor
-from src.configs import Wav2VecBertConfig, HubertEncoderConfig
+from src.encoder import Wav2VecBertEncoder, HubertEncoder, WhisperEncoder, w2vbert2_processor, hubert_processor, whisper_processor
+from src.configs import Wav2VecBertConfig, HubertEncoderConfig, WhisperEncoderConfig
 
 def get_parser():
     from argparse import ArgumentParser
@@ -25,7 +25,7 @@ def get_parser():
     # Features arguments
     parser.add_argument(
         '--tokenizer',
-        choices=['hubert', 'wav2vec'],
+        choices=['hubert', 'wav2vec', 'whisper'],
         type=str,
         required=True,
         help='Encoder to run.'
@@ -116,6 +116,17 @@ def main(args):
             device='cuda'
         )
 
+    elif args.tokenizer == 'whisper':
+        print(f'Loading Whisper and kmeans model from {kmeans_path}')
+
+        kmeans = joblib.load(kmeans_path)
+        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+        encoder = WhisperEncoder(
+            config=WhisperEncoderConfig(),
+            quantize=False,
+            device=args.device,
+        )
+
     try:
         centroids = torch.from_numpy(kmeans.cluster_centers_)
     except AttributeError:
@@ -142,9 +153,13 @@ def main(args):
             out = encoder(ii.to('cuda'), am.to('cuda')).cpu()
 
         elif args.tokenizer == 'wav2vec':
-            ii, am = wav2vec_processor(audio, processor)
+            ii, am = w2vbert2_processor(audio, processor)
             ii = F.pad(ii, (0, 0, 500-ii.shape[1], 0, 0, 0), value=0)
             am = F.pad(am, (500-am.shape[1], 0), value=0)
+            out = encoder(ii.to('cuda'), am.to('cuda'))[layer].cpu()
+
+        elif args.tokenizer == 'whisper':
+            ii, am = whisper_processor(audio, processor)
             out = encoder(ii.to('cuda'), am.to('cuda'))[layer].cpu()
 
         d = get_dist(out, centroids)

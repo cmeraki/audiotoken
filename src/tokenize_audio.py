@@ -63,7 +63,7 @@ if __name__ == '__main__':
     from datasets import load_dataset
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
-    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'wav2vec2'], type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
     parser.add_argument('--indir', type=str, required=False, help='Input directory or filename for audio files.')
     parser.add_argument('--hf_dataset', type=str, required=False, help='Name of the huggingface dataset.')
     parser.add_argument('--outdir', type=str, required=True, help='Output directory for encoded audio.')
@@ -92,7 +92,8 @@ if __name__ == '__main__':
             files,
             sample_rate=VoiceEncoderConfig.model_sample_rate,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            model_token_rate=VoiceEncoderConfig.model_token_rate
+            model_token_rate=VoiceEncoderConfig.model_token_rate,
+            pad_token=VoiceEncoderConfig.pad_token
         )
 
     elif args.tokenizer == 'hubert':
@@ -111,12 +112,13 @@ if __name__ == '__main__':
             sample_rate=HubertEncoderConfig.model_sample_rate,
             single_segment_duration=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,
-            model_token_rate=HubertEncoderConfig.model_token_rate
+            model_token_rate=HubertEncoderConfig.model_token_rate,
+            pad_token=HubertEncoderConfig.pad_token
         )
 
-    elif args.tokenizer == 'wav2vec2':
+    elif args.tokenizer == 'w2vbert2':
         from transformers import AutoFeatureExtractor
-        from .encoder import Wav2VecBertEncoder, wav2vec_processor
+        from .encoder import Wav2VecBertEncoder, w2vbert2_processor
         from .configs import Wav2VecBertConfig
 
         encoder = Wav2VecBertEncoder( # type: ignore
@@ -126,15 +128,19 @@ if __name__ == '__main__':
         )
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(wav2vec_processor, processor=processor)
+        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
             post_transform=post_transform_func,
-            model_token_rate=Wav2VecBertConfig.model_token_rate
+            model_token_rate=Wav2VecBertConfig.model_token_rate,
+            pad_token=Wav2VecBertConfig.pad_token
         )
+
+    elif args.tokenizer == 'whisper':
+        raise NotImplementedError('Implementing')
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)

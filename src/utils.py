@@ -1,5 +1,4 @@
 import os
-import sys
 import torch
 import psutil
 import numpy as np
@@ -102,7 +101,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
 
     ds = load_dataset(
         hf_dataset,
-        "s",
+        "xs",
         trust_remote_code=True,
         token=os.environ.get("HF_TOKEN"),
     )["train"]
