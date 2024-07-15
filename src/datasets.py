@@ -90,7 +90,7 @@ class AudioBatchDataset(IterableDataset):
                     audio_config.end_idx = min(idx + self.segment_length, length)
                     idx += self.segment_length
 
-                    if not self.pad_token:
+                    if self.pad_token is None:
                         yield segment, mask, deepcopy(audio_config)
                         continue
 

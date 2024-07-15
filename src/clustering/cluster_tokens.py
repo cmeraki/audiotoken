@@ -18,8 +18,8 @@ from ..configs import KMeansClusterConfig
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import get_dataset_files, set_process_affinity
 
-LAYERS = [11]
-EMBEDDING_DIM = 768
+LAYERS = [19, -1]
+EMBEDDING_DIM = 1024
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -119,7 +119,7 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
 
             for l in LAYERS:
                 single_layer = encoded_audio[l]
-                # single_layer = layer_norm(single_layer)
+                single_layer = layer_norm(single_layer)
                 logger.info(f"Layer {l}: {single_layer.shape}")
                 B, T, D = single_layer.shape
                 single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
@@ -199,6 +199,7 @@ def main(args):
             post_transform=post_transform_func,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
+            pad_token=Wav2VecBertConfig.pad_token
         )
 
         # Create the encoder model
