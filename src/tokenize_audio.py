@@ -6,22 +6,11 @@ from functools import partial
 from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
-from transformers import Wav2Vec2FeatureExtractor
 
-from .encoder import VoiceEncoder, HubertEncoder
-from .configs import VoiceEncoderConfig, HubertEncoderConfig
-from .utils import find_audio_files, save_audio_tokens, preprocess_audio
-from .datasets import AudioBatchDataset
+from .utils import find_audio_files, save_audio_tokens, get_dataset_files
+from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
-
-def collate_fn(batch):
-        segments, attention_masks, file_names = zip(*batch)
-        return torch.stack(segments), torch.stack(attention_masks), file_names
-
-def batch_generator(dataloader):
-    for batch in dataloader:
-        yield batch
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -30,11 +19,10 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=12,
-        prefetch_factor=4,
+        num_workers=6,
+        prefetch_factor=2,
         pin_memory=True
     )
-    dataloader = batch_generator(dataloader)
 
     start_time = time.time()
 
@@ -75,7 +63,7 @@ if __name__ == '__main__':
     from datasets import load_dataset
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
-    parser.add_argument('--tokenizer', choices=['encodec', 'hubert'], type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'wav2vec2'], type=str, required=True, help='Encoder to run.')
     parser.add_argument('--indir', type=str, required=False, help='Input directory or filename for audio files.')
     parser.add_argument('--hf_dataset', type=str, required=False, help='Name of the huggingface dataset.')
     parser.add_argument('--outdir', type=str, required=True, help='Output directory for encoded audio.')
@@ -87,37 +75,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    assert args.indir or args.hf_dataset, "Either hf_dataset or indir must be provided"
-
-    if args.indir:
-        if os.path.isdir(args.indir):
-            files = find_audio_files(args.indir)
-
-        else:
-            files = [args.indir]
-
-    else:
-        assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
-
-        ds = load_dataset(
-            args.hf_dataset,
-            "xs",
-            trust_remote_code=True,
-            token=os.environ.get("HF_TOKEN"),
-        )["train"]
-
-        files = []
-
-        for idx in range(len(ds)):
-            files.append(
-                ds[idx]["audio"]["path"]
-            )
-
-        logger.info(f'Found {len(files)} audio files in the dataset.')
-
-        del (ds)
+    files = get_dataset_files(args.indir, args.hf_dataset)
+    logger.info(f'Found {len(files)} audio files in the dataset.')
 
     if args.tokenizer == 'encodec':
+        from .encoder import VoiceEncoder
+        from .configs import VoiceEncoderConfig
+
         encoder = VoiceEncoder(
             bandwidth=VoiceEncoderConfig.bandwidth,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
@@ -132,15 +96,15 @@ if __name__ == '__main__':
         )
 
     elif args.tokenizer == 'hubert':
+        from transformers import Wav2Vec2FeatureExtractor
+        from .encoder import HubertEncoder, hubert_processor
+        from .configs import HubertEncoderConfig
+
         encoder = HubertEncoder(device=DEVICE) # type: ignore
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
-        tranform_func = partial(
-            preprocess_audio,
-            sample_rate=HubertEncoderConfig.model_sample_rate,
-            processor=processor
-        )
+        tranform_func = partial(hubert_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
@@ -148,6 +112,28 @@ if __name__ == '__main__':
             single_segment_duration=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,
             model_token_rate=HubertEncoderConfig.model_token_rate
+        )
+
+    elif args.tokenizer == 'wav2vec2':
+        from transformers import AutoFeatureExtractor
+        from .encoder import Wav2VecBertEncoder, wav2vec_processor
+        from .configs import Wav2VecBertConfig
+
+        encoder = Wav2VecBertEncoder( # type: ignore
+            config=Wav2VecBertConfig(),
+            quantize=True,
+            device=DEVICE
+        )
+
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+        post_transform_func = partial(wav2vec_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=Wav2VecBertConfig.model_sample_rate,
+            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            post_transform=post_transform_func,
+            model_token_rate=Wav2VecBertConfig.model_token_rate
         )
 
     outdir = Path(args.outdir)

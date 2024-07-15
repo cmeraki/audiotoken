@@ -1,10 +1,13 @@
 import os
 import sys
 import torch
+import psutil
 import numpy as np
 import torchaudio
 import numpy as np
+from tqdm import tqdm
 from encodec.utils import convert_audio
+from datasets import load_dataset
 
 from .configs import AudioConfig
 from .logger import logger
@@ -83,3 +86,50 @@ def preprocess_audio(audio, sample_rate, processor):
         sampling_rate=sample_rate,
         return_tensors='pt'
     ).input_values[0]
+
+def get_dataset_files(indir: str, hf_dataset: str):
+    assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
+
+    if indir:
+        if os.path.isdir(indir):
+            return find_audio_files(indir)
+
+        return [indir]
+
+    assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"
+
+    files = []
+
+    ds = load_dataset(
+        hf_dataset,
+        "s",
+        trust_remote_code=True,
+        token=os.environ.get("HF_TOKEN"),
+    )["train"]
+
+    for idx in tqdm(range(len(ds))):
+        files.append(
+            ds[idx]["audio"]["path"]
+        )
+
+    del (ds)
+
+    return files
+
+def set_process_affinity(process_id, cores):
+    """
+    Given a process id and a list of cores, this function sets the process affinity to the list of cores
+
+    Args:
+        process_id (int): The process id of the process to set affinity to
+        cores (list): A list of cores to set the process affinity to
+
+    How to use:
+    ```python
+    from src.utils import set_process_affinity
+    # Set the process affinity to the first 4 cores
+    set_process_affinity(os.getpid(), [0, 1, 2, 3])
+    ```
+    """
+    p = psutil.Process(process_id)
+    p.cpu_affinity(cores)
