@@ -159,11 +159,11 @@ class HubertEncoder:
             with torch.no_grad():
                 logger.info(f"Waveform size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
 
-                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states[self.output_layer] # B, T, D
-
-                logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
+                embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states # N, B, T, D
 
                 if self.quantize:
+                    embeddings = embeddings[self.output_layer]  # B, T, D
+                    logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                     min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
@@ -380,7 +380,7 @@ if __name__ == '__main__':
             audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
 
             encoded = hubert_encoder(a.to(device), am)
-            save_audio_tokens(encoded, audio_config, args.outdir)
+            save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
 
         print(f'Hubert encoding took {time() - start_time:.2f}s')
 
@@ -419,7 +419,7 @@ if __name__ == '__main__':
         processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
         whisper_encoder = WhisperEncoder(
             config=WhisperEncoderConfig(),
-            quantize=False,
+            quantize=True,
             device=device,
             compile=False
         )
@@ -434,10 +434,10 @@ if __name__ == '__main__':
                 file_name=p,
                 length_seconds=a.shape[-1]/16_000,
                 length_samples=a.shape[-1],
-                length_tokens=50
+                length_tokens=100
             )
 
             encoded = whisper_encoder(i.to(device), am.to(device))
-            # save_audio_tokens(encoded, audio_config, args.outdir)
+            save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
 
         print(f'Whisper encoding took {time() - start_time:.2f}s')

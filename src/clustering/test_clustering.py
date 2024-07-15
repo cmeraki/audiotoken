@@ -151,7 +151,7 @@ def main(args):
             ii = F.pad(ii, (0, 160_000-ii.shape[1]), value=0)
             am = F.pad(am, (0, 160_000-am.shape[1]), value=0)
 
-            out = encoder(ii.to(args.device), am.to(args.device)).cpu()
+            out = encoder(ii.to(args.device), am.to(args.device))[layer].cpu()
 
         elif args.tokenizer == 'wav2vec':
             ii, am = w2vbert2_processor(audio, processor)

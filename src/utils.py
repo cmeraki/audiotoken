@@ -101,7 +101,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
 
     ds = load_dataset(
         hf_dataset,
-        "xs",
+        "s",
         trust_remote_code=True,
         token=os.environ.get("HF_TOKEN"),
     )["train"]

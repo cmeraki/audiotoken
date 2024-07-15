@@ -18,7 +18,8 @@ from ..configs import KMeansClusterConfig
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import get_dataset_files, set_process_affinity
 
-LAYERS = [2, 4]
+LAYERS = [11]
+EMBEDDING_DIM = 768
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -28,7 +29,7 @@ def get_parser():
     # Features arguments
     parser.add_argument(
         '--embedder',
-        choices=['w2vbert2', 'whisper'],
+        choices=['hubert', 'w2vbert2', 'whisper'],
         type=str,
         required=True,
         help='Embedder to run.'
@@ -91,7 +92,7 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
     )
 
     layer_norm = torch.nn.LayerNorm(
-        normalized_shape=384,
+        normalized_shape=EMBEDDING_DIM,
         elementwise_affine=False,
         bias=False,
         device=DEVICE,
@@ -118,7 +119,7 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
 
             for l in LAYERS:
                 single_layer = encoded_audio[l]
-                single_layer = layer_norm(single_layer)
+                # single_layer = layer_norm(single_layer)
                 logger.info(f"Layer {l}: {single_layer.shape}")
                 B, T, D = single_layer.shape
                 single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
@@ -230,11 +231,34 @@ def main(args):
             device=args.device,
         )
 
+    elif args.embedder == 'hubert':
+        from transformers import Wav2Vec2FeatureExtractor
+        from ..encoder import HubertEncoder, hubert_processor
+        from ..configs import HubertEncoderConfig
+
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+        tranform_func = partial(hubert_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=HubertEncoderConfig.model_sample_rate,
+            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            transform=tranform_func,
+            model_token_rate=HubertEncoderConfig.model_token_rate,
+            pad_token=HubertEncoderConfig.pad_token
+        )
+
+        encoder = HubertEncoder(
+            device=args.device,
+            quantize=False
+        )
+
     # Create the k-means model
     total_batches = 0
     quantizers = {}
 
     for l in LAYERS:
+        logger.info(f'Creating k-means model for layer: {l}')
         quantizers[l] = get_kmeans_model(
             n_clusters=args.num_clusters,
             config=KMeansClusterConfig,
