@@ -94,7 +94,7 @@ def main(args):
     samples = args.samples
     kmeans_path = Path(args.kmeans).expanduser() if args.kmeans else None
 
-    assert len(audio_files) > samples, f'Number of samples {samples} needs to be greater than number of audio files {len(audio_files)}'
+    assert len(audio_files) > samples, f'Number of samples {samples} needs to be less than number of audio files {len(audio_files)}'
 
     if args.tokenizer == 'hubert':
         kmeans_path = HubertEncoderConfig.quantizer_path
@@ -102,7 +102,7 @@ def main(args):
 
         kmeans = joblib.load(kmeans_path)
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-        encoder = HubertEncoder(quantize=False, compile=False, device='cuda')
+        encoder = HubertEncoder(quantize=False, compile=False, device=args.device)
 
     elif args.tokenizer == 'wav2vec':
         print(f'Loading Wav2VecBert and kmeans model from {kmeans_path}')
@@ -113,7 +113,7 @@ def main(args):
             config=Wav2VecBertConfig(),
             quantize=False,
             compile=False,
-            device='cuda'
+            device=args.device
         )
 
     elif args.tokenizer == 'whisper':
@@ -125,6 +125,7 @@ def main(args):
             config=WhisperEncoderConfig(),
             quantize=False,
             device=args.device,
+            compile=False
         )
 
     try:
@@ -150,17 +151,17 @@ def main(args):
             ii = F.pad(ii, (0, 160_000-ii.shape[1]), value=0)
             am = F.pad(am, (0, 160_000-am.shape[1]), value=0)
 
-            out = encoder(ii.to('cuda'), am.to('cuda')).cpu()
+            out = encoder(ii.to(args.device), am.to(args.device)).cpu()
 
         elif args.tokenizer == 'wav2vec':
             ii, am = w2vbert2_processor(audio, processor)
             ii = F.pad(ii, (0, 0, 500-ii.shape[1], 0, 0, 0), value=0)
             am = F.pad(am, (500-am.shape[1], 0), value=0)
-            out = encoder(ii.to('cuda'), am.to('cuda'))[layer].cpu()
+            out = encoder(ii.to(args.device), am.to(args.device))[layer].cpu()
 
         elif args.tokenizer == 'whisper':
             ii, am = whisper_processor(audio, processor)
-            out = encoder(ii.to('cuda'), am.to('cuda'))[layer].cpu()
+            out = encoder(ii.to(args.device), am.to(args.device))[layer].cpu()
 
         d = get_dist(out, centroids)
 

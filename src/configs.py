@@ -49,7 +49,7 @@ class WhisperEncoderConfig:
     single_segment_duration: int = 30 # Whisper converts the audio to images of mel spectrograms
     model_token_rate: int = 100 # Whisper has a fixed token rate
     output_layer: int = -1
-    quantizer_path: Optional[str] = ''
+    quantizer_path: Optional[str] = 'data/kmeans_whisper_xs/kmeans__L4_C1024_ckpt1450.pkl'
     pad_token: Optional[int] = None
 
 @dataclass
