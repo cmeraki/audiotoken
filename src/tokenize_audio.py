@@ -19,7 +19,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=6,
+        num_workers=2,
         prefetch_factor=2,
         pin_memory=True
     )
@@ -88,6 +88,7 @@ if __name__ == '__main__':
             bandwidth=VoiceEncoderConfig.bandwidth,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
             device=DEVICE,
+            compile=False
         )
 
         dataset = AudioBatchDataset(
@@ -162,28 +163,6 @@ if __name__ == '__main__':
             post_transform=post_transform_func,
             model_token_rate=WhisperEncoderConfig.model_token_rate,
             pad_token=WhisperEncoderConfig.pad_token
-        )
-
-    elif args.tokenizer == 'wav2vec2':
-        from transformers import AutoFeatureExtractor
-        from .encoder import Wav2VecBertEncoder, wav2vec_processor
-        from .configs import Wav2VecBertConfig
-
-        encoder = Wav2VecBertEncoder( # type: ignore
-            config=Wav2VecBertConfig(),
-            quantize=True,
-            device=DEVICE
-        )
-
-        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(wav2vec_processor, processor=processor)
-
-        dataset = AudioBatchDataset(
-            files,
-            sample_rate=Wav2VecBertConfig.model_sample_rate,
-            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
-            post_transform=post_transform_func,
-            model_token_rate=Wav2VecBertConfig.model_token_rate
         )
 
     outdir = Path(args.outdir)

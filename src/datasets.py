@@ -1,6 +1,7 @@
 import torch
 import math
 from typing import List, Optional
+import numpy as np
 from copy import deepcopy
 import torch.nn.functional as F
 from torch.utils.data import IterableDataset, get_worker_info
@@ -27,7 +28,14 @@ class AudioBatchDataset(IterableDataset):
             overlap: float = 0
         ):
 
-        self.audio_files = audio_files
+        # From: https://github.com/pytorch/pytorch/issues/13246#issuecomment-715050814
+        # If the list of audio files is Python list, the memory usage is very high when using multiple works
+        # It is better to convert the list to numpy array
+        # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
+        self.audio_files = np.array(audio_files).astype(np.string_)
+
+        # self.audio_files = audio_files
+
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
         self.transform = transform
@@ -40,6 +48,9 @@ class AudioBatchDataset(IterableDataset):
 
         # TODO: Implement overlap
         assert self.stride == self.segment_length, "Overlap not supported yet"
+
+        self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
+        self.files_processed = torch.zeros(1, dtype=torch.long).share_memory_()
 
     def __iter__(self):
         worker_info = get_worker_info()
@@ -57,8 +68,13 @@ class AudioBatchDataset(IterableDataset):
 
             logger.info(f"Worker {worker_id} processing files {iter_start} to {iter_end}")
 
+        self.files_processed += 1
+        self.pbar.n = self.files_processed.item()
+        self.pbar.refresh()
+
         for idx in range(iter_start, iter_end):
-            file_path = self.audio_files[idx]
+            file_path = str(self.audio_files[idx], encoding='utf-8')
+            # file_path = self.audio_files[idx]
             waveform = read_audio(file_path, self.sample_rate)
             length = waveform.shape[-1]
 
@@ -116,6 +132,9 @@ class AudioBatchDataset(IterableDataset):
                     segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
 
                 yield segment, attention_mask, deepcopy(audio_config)
+    def __del__(self):
+        self.pbar.close()
+
 
 
 if __name__ == '__main__':
