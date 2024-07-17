@@ -142,29 +142,6 @@ if __name__ == '__main__':
             pad_token=Wav2VecBertConfig.pad_token
         )
 
-    elif args.tokenizer == 'whisper':
-        from transformers import WhisperFeatureExtractor
-        from .encoder import WhisperEncoder, whisper_processor
-        from .configs import WhisperEncoderConfig
-
-        encoder = WhisperEncoder(  # type: ignore
-            config=WhisperEncoderConfig(),
-            quantize=True,
-            device=DEVICE
-        )
-
-        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
-        post_transform_func = partial(whisper_processor, processor=processor)
-
-        dataset = AudioBatchDataset(
-            files,
-            sample_rate=WhisperEncoderConfig.model_sample_rate,
-            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
-            post_transform=post_transform_func,
-            model_token_rate=WhisperEncoderConfig.model_token_rate,
-            pad_token=WhisperEncoderConfig.pad_token
-        )
-
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
