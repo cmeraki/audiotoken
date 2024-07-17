@@ -1,6 +1,6 @@
 import torch
 import math
-from typing import List
+from typing import List, Optional
 from copy import deepcopy
 import torch.nn.functional as F
 from torch.utils.data import IterableDataset, get_worker_info
@@ -23,7 +23,7 @@ class AudioBatchDataset(IterableDataset):
             model_token_rate: int,
             transform=None,
             post_transform=None,
-            pad_token: int = 0,
+            pad_token: Optional[int] = 0,
             overlap: float = 0
         ):
 
@@ -44,11 +44,10 @@ class AudioBatchDataset(IterableDataset):
     def __iter__(self):
         worker_info = get_worker_info()
 
-        if worker_info is None:
-            iter_start = 0
-            iter_end = len(self.audio_files)
+        iter_start = 0
+        iter_end = len(self.audio_files)
 
-        else:
+        if worker_info is not None:
             per_worker = int(
                 math.ceil(len(self.audio_files) / float(worker_info.num_workers))
             )
@@ -60,78 +59,76 @@ class AudioBatchDataset(IterableDataset):
 
         for idx in range(iter_start, iter_end):
             file_path = self.audio_files[idx]
+            waveform = read_audio(file_path, self.sample_rate)
+            length = waveform.shape[-1]
 
-            try:
-                waveform = read_audio(file_path, self.sample_rate)
-                length = waveform.shape[-1]
+            if self.transform:
+                waveform = self.transform(waveform)
 
-                if self.transform:
-                    waveform = self.transform(waveform)
+            audio_config = AudioConfig(
+                file_name=file_path,
+                length_seconds=length/ self.sample_rate,
+                length_samples=length,
+                length_tokens=self.model_token_rate
+            )
 
-                audio_config = AudioConfig(
-                    file_name=file_path,
-                    length_seconds=length/ self.sample_rate,
-                    length_samples=length,
-                    length_tokens=self.model_token_rate
-                )
+            # If post transform is provided it is assumed that the transform
+            # will take in the audio and produce (N, D) tensor where N 
+            # is the number od tokens and D is the dimension of the token
+            if self.post_transform:
+                input_ids, attention_mask = self.post_transform(waveform)
+                input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
+                stride = self.model_token_rate * self.single_segment_duration
 
-                # If post transform is provided it is assumed that the transform
-                # will take in the audio and produce (N, D) tensor where N 
-                # is the number od tokens and D is the dimension of the token
-                if self.post_transform:
-                    input_ids, attention_mask = self.post_transform(waveform)
-                    input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
-                    stride = self.model_token_rate * self.single_segment_duration
+                idx = 0
+                for i in range(0, input_ids.shape[0], stride):
+                    segment = input_ids[i:i+stride, :]
+                    mask = attention_mask[i:i+stride]
 
-                    idx = 0
-                    for i in range(0, input_ids.shape[0], stride):
-                        segment = input_ids[i:i+stride, :]
-                        mask = attention_mask[i:i+stride]
+                    # Store audio configs start idx, end idx in seconds
+                    audio_config.start_idx = idx
+                    audio_config.end_idx = min(idx + self.segment_length, length)
+                    idx += self.segment_length
 
-                        padded_len = stride - segment.shape[0]
-                        segment = F.pad(segment, (0, 0, 0, padded_len), "constant", value=self.pad_token)
-                        mask = F.pad(mask, (0, padded_len), "constant", value=self.pad_token)
-
-                        # Store audio configs start idx, end idx in seconds
-                        audio_config.start_idx = idx
-                        audio_config.end_idx = min(idx + self.segment_length, length)
-                        idx += self.segment_length
-
+                    if self.pad_token is None:
                         yield segment, mask, deepcopy(audio_config)
+                        continue
 
-                    continue
+                    padded_len = stride - segment.shape[0]
+                    segment = F.pad(segment, (0, 0, 0, padded_len), "constant", value=self.pad_token)
+                    mask = F.pad(mask, (0, padded_len), "constant", value=0)
 
+                    yield segment, mask, deepcopy(audio_config)
 
-                for i in range(0, length, self.stride):
-                    segment = waveform[0, i:i+self.segment_length]
-                    attention_mask = torch.ones(segment.shape[0])
-                    audio_config.start_idx = i
-                    audio_config.end_idx = min(i + self.segment_length, length)
-
-                    if segment.shape[0] < self.segment_length:
-                        padded_segment_len = self.segment_length - segment.shape[0]
-
-                        attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=self.pad_token)
-                        segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
-
-                    yield segment, attention_mask, deepcopy(audio_config)
-
-            except Exception as e:
-                logger.error(f"Error reading audio file {file_path}, error: {e}")
                 continue
 
 
-if __name__ == '__main__':
+            for i in range(0, length, self.stride):
+                segment = waveform[0, i:i+self.segment_length]
+                attention_mask = torch.ones(segment.shape[0])
+                audio_config.start_idx = i
+                audio_config.end_idx = min(i + self.segment_length, length)
 
+                if segment.shape[0] < self.segment_length:
+                    padded_segment_len = self.segment_length - segment.shape[0]
+
+                    attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=0)
+                    segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
+
+                yield segment, attention_mask, deepcopy(audio_config)
+
+
+if __name__ == '__main__':
+    import pdb
     from tqdm import tqdm
     from src.utils import find_audio_files
     from torch.utils.data import DataLoader
     from argparse import ArgumentParser
     from functools import partial
-    from transformers import AutoFeatureExtractor
+    from transformers import AutoFeatureExtractor, WhisperFeatureExtractor
 
-    from .encoder import wav2vec_processor
-    from .configs import Wav2VecBertConfig
+    from .encoder import w2vbert2_processor, whisper_processor
+    from .configs import Wav2VecBertConfig, WhisperEncoderConfig
 
     parser = ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="./data/test-clean/LibriSpeech/test-clean/121/121726")
@@ -139,16 +136,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
     fns = find_audio_files(args.data_dir)
 
-
+    # Trying out w2vbert2 pipeline
     processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-    post_transform_func = partial(wav2vec_processor, processor=processor)
+    post_transform_func = partial(w2vbert2_processor, processor=processor)
 
     ds = AudioBatchDataset(
         audio_files=fns,
         sample_rate=Wav2VecBertConfig.model_sample_rate,
         single_segment_duration=Wav2VecBertConfig.single_segment_duration,
         post_transform=post_transform_func,
-        model_token_rate=Wav2VecBertConfig.model_token_rate
+        model_token_rate=Wav2VecBertConfig.model_token_rate,
+        pad_token=Wav2VecBertConfig.pad_token
     )
 
     for f in ds:
@@ -163,6 +161,31 @@ if __name__ == '__main__':
     )
 
     for segments, attention_masks, file_names in tqdm(dataloader):
-        # pdb.set_trace()
-        print(f"Files in this batch: {file_names} Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}")
-        pass
+        print(f"Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}")
+
+    # Trying out whisper pipeline
+    processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+    post_transform_func = partial(whisper_processor, processor=processor)
+
+    ds = AudioBatchDataset(
+        audio_files=fns,
+        sample_rate=WhisperEncoderConfig.model_sample_rate,
+        single_segment_duration=WhisperEncoderConfig.single_segment_duration,
+        post_transform=post_transform_func,
+        model_token_rate=WhisperEncoderConfig.model_token_rate,
+        pad_token=WhisperEncoderConfig.pad_token
+    )
+
+    for f in ds:
+        print(f'Shape of segment {f[0].shape}, Shape of attention mask {f[1].shape}, File name: {f[2].file_name}')
+
+
+    dataloader = DataLoader(
+        ds,
+        batch_size=4,
+        collate_fn=collate_fn,
+        num_workers=4
+    )
+
+    for segments, attention_masks, file_names in tqdm(dataloader):
+        print(f"Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}")

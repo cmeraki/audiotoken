@@ -1,5 +1,4 @@
 import os
-import sys
 import torch
 import psutil
 import numpy as np
@@ -64,7 +63,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         tokens = tokens.cpu().numpy()
         tokens_len = audio_pointer.tokens_len # type: ignore
 
-        logger.info(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
+        logger.debug(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
 
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
@@ -74,7 +73,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         else:
             np.save(save_path, tokens[:, :tokens_len])
 
-        logger.info(f"Saved tokens for {filename} to {save_path}")
+        logger.debug(f"Saved tokens for {filename} to {save_path}")
 
     except Exception as e:
         logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
@@ -90,10 +89,10 @@ def preprocess_audio(audio, sample_rate, processor):
 def get_dataset_files(indir: str, hf_dataset: str):
     assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
 
-    if indir:
-        if os.path.isdir(indir):
-            return find_audio_files(indir)
+    if indir and os.path.isdir(indir):
+        return find_audio_files(indir)
 
+    elif indir and not os.path.isdir(indir):
         return [indir]
 
     assert os.environ.get("HF_TOKEN"), "Please set the huggingface API token in the environment (HF_TOKEN)"

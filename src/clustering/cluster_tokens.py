@@ -7,18 +7,19 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 import psutil
+import torch
 from functools import partial
-from transformers import AutoFeatureExtractor
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 
 from ..logger import logger
-from ..configs import KMeansClusterConfig, Wav2VecBertConfig
+from ..configs import KMeansClusterConfig
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import get_dataset_files, set_process_affinity
-from ..encoder import Wav2VecBertEncoder, wav2vec2_processor
 
+LAYERS = [19, -1]
+EMBEDDING_DIM = 1024
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -26,6 +27,13 @@ def get_parser():
     )
 
     # Features arguments
+    parser.add_argument(
+        '--embedder',
+        choices=['hubert', 'w2vbert2', 'whisper'],
+        type=str,
+        required=True,
+        help='Embedder to run.'
+    )
     parser.add_argument(
         '--indir',
         type=str,
@@ -49,12 +57,6 @@ def get_parser():
         type=int,
         default=1024,
         help="Number of clusters to learn",
-    )
-    parser.add_argument(
-        "--layer",
-        type=int,
-        help="The layer of the pretrained model to extract features from",
-        default=-1,
     )
     parser.add_argument(
         "--batch_size",
@@ -89,13 +91,18 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
         pin_memory=True
     )
 
-    layers = [15, 18, 21]
+    layer_norm = torch.nn.LayerNorm(
+        normalized_shape=EMBEDDING_DIM,
+        elementwise_affine=False,
+        bias=False,
+        device=DEVICE,
+    )
+
     accumulated_batch_size = 0
-    features_batch = {
-        15: [],
-        18: [],
-        21: []
-    }
+    features_batch = {}
+    for l in LAYERS:
+     features_batch[l] = []
+
     start_time = time.time()
 
     for e in tqdm(range(epochs)):
@@ -110,9 +117,10 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
 
             encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
 
-            for l in layers:
+            for l in LAYERS:
                 single_layer = encoded_audio[l]
-                logger.info(f"Layer: {single_layer.shape}")
+                single_layer = layer_norm(single_layer)
+                logger.info(f"Layer {l}: {single_layer.shape}")
                 B, T, D = single_layer.shape
                 single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
                 features_batch[l].append(single_layer)
@@ -125,11 +133,9 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
                 yield features_batch, accumulated_batch_size
                 start_time = time.time()
                 accumulated_batch_size = 0
-                features_batch = {
-                    15: [],
-                    18: [],
-                    21: []
-                }
+
+                for l in LAYERS:
+                    features_batch[l] = []
 
     if accumulated_batch_size > 0:
         logger.info(f"Yielding batch of size {accumulated_batch_size}")
@@ -178,46 +184,86 @@ def main(args):
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
 
-    # Create the dataset and the dataloader
-    wav2vecbert_config:Wav2VecBertConfig = Wav2VecBertConfig(output_layer=args.layer) # type:ignore
+    if args.embedder == 'w2vbert2':
+        # Create the dataset and the encoder
+        from transformers import AutoFeatureExtractor
+        from ..configs import Wav2VecBertConfig
+        from ..encoder import w2vbert2_processor, Wav2VecBertEncoder
 
-    processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-    post_transform_func = partial(wav2vec2_processor, processor=processor)
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
-    dataset = AudioBatchDataset(
-        files,
-        sample_rate=Wav2VecBertConfig.model_sample_rate,
-        post_transform=post_transform_func,
-        single_segment_duration=Wav2VecBertConfig.single_segment_duration,
-        model_token_rate=Wav2VecBertConfig.model_token_rate,
-    )
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=Wav2VecBertConfig.model_sample_rate,
+            post_transform=post_transform_func,
+            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            model_token_rate=Wav2VecBertConfig.model_token_rate,
+            pad_token=Wav2VecBertConfig.pad_token
+        )
 
-    # Create the encoder model
-    encoder = Wav2VecBertEncoder(
-        config=wav2vecbert_config,
-        device=args.device
-    )
+        # Create the encoder model
+        encoder = Wav2VecBertEncoder(
+            config=Wav2VecBertConfig(),
+            device=args.device
+        )
+
+    elif args.embedder == 'whisper':
+        # Create the dataset and the encoder
+        from transformers import WhisperFeatureExtractor
+        from ..configs import WhisperEncoderConfig
+        from ..encoder import WhisperEncoder, whisper_processor
+
+        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+        post_transform_func = partial(whisper_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=WhisperEncoderConfig.model_sample_rate,
+            post_transform=post_transform_func,
+            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
+            model_token_rate=WhisperEncoderConfig.model_token_rate,
+            pad_token=WhisperEncoderConfig.pad_token,
+        )
+
+        encoder = WhisperEncoder(
+            config=WhisperEncoderConfig(),
+            quantize=False,
+            device=args.device,
+        )
+
+    elif args.embedder == 'hubert':
+        from transformers import Wav2Vec2FeatureExtractor
+        from ..encoder import HubertEncoder, hubert_processor
+        from ..configs import HubertEncoderConfig
+
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+        tranform_func = partial(hubert_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=HubertEncoderConfig.model_sample_rate,
+            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            transform=tranform_func,
+            model_token_rate=HubertEncoderConfig.model_token_rate,
+            pad_token=HubertEncoderConfig.pad_token
+        )
+
+        encoder = HubertEncoder(
+            device=args.device,
+            quantize=False
+        )
 
     # Create the k-means model
-    kmeans_model = get_kmeans_model(
-        n_clusters=args.num_clusters,
-        config=KMeansClusterConfig,
-    )
     total_batches = 0
-    quantizers = {
-        15: get_kmeans_model(
-            n_clusters=args.num_clusters,
-            config=KMeansClusterConfig,
-        ),
-        18: get_kmeans_model(
-            n_clusters=args.num_clusters,
-            config=KMeansClusterConfig,
-        ),
-        21: get_kmeans_model(
+    quantizers = {}
+
+    for l in LAYERS:
+        logger.info(f'Creating k-means model for layer: {l}')
+        quantizers[l] = get_kmeans_model(
             n_clusters=args.num_clusters,
             config=KMeansClusterConfig,
         )
-    }
 
     # Iterate and train the k-means model batch by batch
     for idx, (kmeans_batch, batch_size) in enumerate(
@@ -244,7 +290,7 @@ def main(args):
 
 if __name__ == "__main__":
     """
-    python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --layer -1 --device cuda
+    python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --device cuda
     """
 
     set_process_affinity(os.getpid(), [p for p in range(16)])

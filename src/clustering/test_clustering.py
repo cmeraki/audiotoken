@@ -9,11 +9,13 @@ import torch.nn.functional as F
 from time import time
 
 import matplotlib.pyplot as plt
-from transformers import Wav2Vec2FeatureExtractor, AutoFeatureExtractor
+from transformers import Wav2Vec2FeatureExtractor, AutoFeatureExtractor, WhisperFeatureExtractor
 
 from src.utils import read_audio, find_files
-from src.encoder import Wav2VecBertEncoder, HubertEncoder, wav2vec_processor, hubert_processor
-from src.configs import Wav2VecBertConfig, HubertEncoderConfig
+from src.encoder import Wav2VecBertEncoder, HubertEncoder, WhisperEncoder, w2vbert2_processor, hubert_processor, whisper_processor
+from src.configs import Wav2VecBertConfig, HubertEncoderConfig, WhisperEncoderConfig
+
+EMBEDDING_DIM = 1024
 
 def get_parser():
     from argparse import ArgumentParser
@@ -25,7 +27,7 @@ def get_parser():
     # Features arguments
     parser.add_argument(
         '--tokenizer',
-        choices=['hubert', 'wav2vec'],
+        choices=['hubert', 'w2vbert2', 'whisper'],
         type=str,
         required=True,
         help='Encoder to run.'
@@ -94,18 +96,18 @@ def main(args):
     samples = args.samples
     kmeans_path = Path(args.kmeans).expanduser() if args.kmeans else None
 
-    assert len(audio_files) > samples, f'Number of samples {samples} needs to be greater than number of audio files {len(audio_files)}'
+    assert len(audio_files) > samples, f'Number of samples {samples} needs to be less than number of audio files {len(audio_files)}'
 
     if args.tokenizer == 'hubert':
-        kmeans_path = HubertEncoderConfig.quantizer_path
+        # kmeans_path = HubertEncoderConfig.quantizer_path
         print(f'Loading Hubert model and kmeans model from {kmeans_path}')
 
         kmeans = joblib.load(kmeans_path)
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-        encoder = HubertEncoder(quantize=False, compile=False, device='cuda')
+        encoder = HubertEncoder(quantize=False, compile=False, device=args.device)
 
-    elif args.tokenizer == 'wav2vec':
-        print(f'Loading Wav2VecBert and kmeans model from {kmeans_path}')
+    elif args.tokenizer == 'w2vbert2':
+        print(f'Loading Wav2VecBert2 and kmeans model from {kmeans_path}')
 
         kmeans = joblib.load(kmeans_path)
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
@@ -113,7 +115,19 @@ def main(args):
             config=Wav2VecBertConfig(),
             quantize=False,
             compile=False,
-            device='cuda'
+            device=args.device
+        )
+
+    elif args.tokenizer == 'whisper':
+        print(f'Loading Whisper and kmeans model from {kmeans_path}')
+
+        kmeans = joblib.load(kmeans_path)
+        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+        encoder = WhisperEncoder(
+            config=WhisperEncoderConfig(),
+            quantize=False,
+            device=args.device,
+            compile=False
         )
 
     try:
@@ -127,6 +141,13 @@ def main(args):
     audio_tokens = []
     embeddings = []
 
+    layer_norm = torch.nn.LayerNorm(
+        normalized_shape=EMBEDDING_DIM,
+        elementwise_affine=False,
+        bias=False,
+        device=args.device,
+    )
+
     print(f'Computing embeddings')
 
     for a in tqdm(audio_files, total=samples):
@@ -139,14 +160,19 @@ def main(args):
             ii = F.pad(ii, (0, 160_000-ii.shape[1]), value=0)
             am = F.pad(am, (0, 160_000-am.shape[1]), value=0)
 
-            out = encoder(ii.to('cuda'), am.to('cuda')).cpu()
+            out = encoder(ii.to(args.device), am.to(args.device))
 
-        elif args.tokenizer == 'wav2vec':
-            ii, am = wav2vec_processor(audio, processor)
+        elif args.tokenizer == 'w2vbert2':
+            ii, am = w2vbert2_processor(audio, processor)
             ii = F.pad(ii, (0, 0, 500-ii.shape[1], 0, 0, 0), value=0)
             am = F.pad(am, (500-am.shape[1], 0), value=0)
-            out = encoder(ii.to('cuda'), am.to('cuda'))[layer].cpu()
+            out = encoder(ii.to(args.device), am.to(args.device))
 
+        elif args.tokenizer == 'whisper':
+            ii, am = whisper_processor(audio, processor)
+            out = encoder(ii.to(args.device), am.to(args.device))
+
+        out = layer_norm(out[layer]).cpu()
         d = get_dist(out, centroids)
 
         embeddings.append(out.numpy())

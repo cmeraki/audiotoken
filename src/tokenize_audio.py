@@ -7,7 +7,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens, get_dataset_files
+from .utils import find_audio_files, save_audio_tokens, get_dataset_files, set_process_affinity
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
@@ -62,8 +62,10 @@ if __name__ == '__main__':
     import argparse
     from datasets import load_dataset
 
+    set_process_affinity(os.getpid(), list(range(0, 12)))
+
     parser = argparse.ArgumentParser(description='Encode audio files.')
-    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'wav2vec2'], type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
     parser.add_argument('--indir', type=str, required=False, help='Input directory or filename for audio files.')
     parser.add_argument('--hf_dataset', type=str, required=False, help='Name of the huggingface dataset.')
     parser.add_argument('--outdir', type=str, required=True, help='Output directory for encoded audio.')
@@ -92,7 +94,8 @@ if __name__ == '__main__':
             files,
             sample_rate=VoiceEncoderConfig.model_sample_rate,
             single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            model_token_rate=VoiceEncoderConfig.model_token_rate
+            model_token_rate=VoiceEncoderConfig.model_token_rate,
+            pad_token=VoiceEncoderConfig.pad_token
         )
 
     elif args.tokenizer == 'hubert':
@@ -111,7 +114,54 @@ if __name__ == '__main__':
             sample_rate=HubertEncoderConfig.model_sample_rate,
             single_segment_duration=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,
-            model_token_rate=HubertEncoderConfig.model_token_rate
+            model_token_rate=HubertEncoderConfig.model_token_rate,
+            pad_token=HubertEncoderConfig.pad_token
+        )
+
+    elif args.tokenizer == 'w2vbert2':
+        from transformers import AutoFeatureExtractor
+        from .encoder import Wav2VecBertEncoder, w2vbert2_processor
+        from .configs import Wav2VecBertConfig
+
+        encoder = Wav2VecBertEncoder( # type: ignore
+            config=Wav2VecBertConfig(),
+            quantize=True,
+            device=DEVICE
+        )
+
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+        post_transform_func = partial(w2vbert2_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=Wav2VecBertConfig.model_sample_rate,
+            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            post_transform=post_transform_func,
+            model_token_rate=Wav2VecBertConfig.model_token_rate,
+            pad_token=Wav2VecBertConfig.pad_token
+        )
+
+    elif args.tokenizer == 'whisper':
+        from transformers import WhisperFeatureExtractor
+        from .encoder import WhisperEncoder, whisper_processor
+        from .configs import WhisperEncoderConfig
+
+        encoder = WhisperEncoder(  # type: ignore
+            config=WhisperEncoderConfig(),
+            quantize=True,
+            device=DEVICE
+        )
+
+        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+        post_transform_func = partial(whisper_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=WhisperEncoderConfig.model_sample_rate,
+            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
+            post_transform=post_transform_func,
+            model_token_rate=WhisperEncoderConfig.model_token_rate,
+            pad_token=WhisperEncoderConfig.pad_token
         )
 
     elif args.tokenizer == 'wav2vec2':
