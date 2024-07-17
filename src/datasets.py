@@ -68,11 +68,11 @@ class AudioBatchDataset(IterableDataset):
 
             logger.info(f"Worker {worker_id} processing files {iter_start} to {iter_end}")
 
-        self.files_processed += 1
-        self.pbar.n = self.files_processed.item()
-        self.pbar.refresh()
-
         for idx in range(iter_start, iter_end):
+            self.files_processed += 1
+            self.pbar.n = self.files_processed.item()
+            self.pbar.refresh()
+
             file_path = str(self.audio_files[idx], encoding='utf-8')
             # file_path = self.audio_files[idx]
             waveform = read_audio(file_path, self.sample_rate)
@@ -132,79 +132,85 @@ class AudioBatchDataset(IterableDataset):
                     segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
 
                 yield segment, attention_mask, deepcopy(audio_config)
-    def __del__(self):
+
         self.pbar.close()
-
-
 
 if __name__ == '__main__':
     import pdb
     from tqdm import tqdm
-    from src.utils import find_audio_files
     from torch.utils.data import DataLoader
     from argparse import ArgumentParser
     from functools import partial
-    from transformers import AutoFeatureExtractor, WhisperFeatureExtractor
+    from torch.cuda import empty_cache
 
-    from .encoder import w2vbert2_processor, whisper_processor
-    from .configs import Wav2VecBertConfig, WhisperEncoderConfig
+    from .utils import get_dataset_files
 
     parser = ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="./data/test-clean/LibriSpeech/test-clean/121/121726")
+    parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
+    parser.add_argument('--workers', type=int, default=4, help='Batch size for encoding.')
 
     args = parser.parse_args()
-    fns = find_audio_files(args.data_dir)
+    files = get_dataset_files(None, 'speechcolab/gigaspeech') # type: ignore
 
-    # Trying out w2vbert2 pipeline
-    processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-    post_transform_func = partial(w2vbert2_processor, processor=processor)
+    if args.tokenizer == 'encodec':
+        from .configs import VoiceEncoderConfig
 
-    ds = AudioBatchDataset(
-        audio_files=fns,
-        sample_rate=Wav2VecBertConfig.model_sample_rate,
-        single_segment_duration=Wav2VecBertConfig.single_segment_duration,
-        post_transform=post_transform_func,
-        model_token_rate=Wav2VecBertConfig.model_token_rate,
-        pad_token=Wav2VecBertConfig.pad_token
-    )
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=VoiceEncoderConfig.model_sample_rate,
+            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
+            model_token_rate=VoiceEncoderConfig.model_token_rate,
+            pad_token=VoiceEncoderConfig.pad_token
+        )
 
-    for f in ds:
-        print(f'Shape of segment {f[0].shape}, Shape of attention mask {f[1].shape}, File name: {f[2].file_name}')
+    elif args.tokenizer == 'hubert':
+        from transformers import Wav2Vec2FeatureExtractor
+        from .encoder import hubert_processor
+        from .configs import HubertEncoderConfig
 
+        processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+        tranform_func = partial(hubert_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=HubertEncoderConfig.model_sample_rate,
+            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            transform=tranform_func,
+            model_token_rate=HubertEncoderConfig.model_token_rate,
+            pad_token=HubertEncoderConfig.pad_token
+        )
+
+    elif args.tokenizer == 'w2vbert2':
+        from transformers import AutoFeatureExtractor
+        from .encoder import w2vbert2_processor
+        from .configs import Wav2VecBertConfig
+
+        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
+        post_transform_func = partial(w2vbert2_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=Wav2VecBertConfig.model_sample_rate,
+            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            post_transform=post_transform_func,
+            model_token_rate=Wav2VecBertConfig.model_token_rate,
+            pad_token=Wav2VecBertConfig.pad_token
+        )
 
     dataloader = DataLoader(
-        ds,
-        batch_size=4,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4
+        num_workers=args.workers,
+        prefetch_factor=2,
+        pin_memory=True
     )
 
-    for segments, attention_masks, file_names in tqdm(dataloader):
-        print(f"Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}")
+    for idx, (segments, attention_masks, file_names) in enumerate(dataloader):
+        segments = segments.to('cuda')
+        attention_masks = attention_masks.to('cuda')
 
-    # Trying out whisper pipeline
-    processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
-    post_transform_func = partial(whisper_processor, processor=processor)
-
-    ds = AudioBatchDataset(
-        audio_files=fns,
-        sample_rate=WhisperEncoderConfig.model_sample_rate,
-        single_segment_duration=WhisperEncoderConfig.single_segment_duration,
-        post_transform=post_transform_func,
-        model_token_rate=WhisperEncoderConfig.model_token_rate,
-        pad_token=WhisperEncoderConfig.pad_token
-    )
-
-    for f in ds:
-        print(f'Shape of segment {f[0].shape}, Shape of attention mask {f[1].shape}, File name: {f[2].file_name}')
-
-
-    dataloader = DataLoader(
-        ds,
-        batch_size=4,
-        collate_fn=collate_fn,
-        num_workers=4
-    )
-
-    for segments, attention_masks, file_names in tqdm(dataloader):
-        print(f"Segments shape: {segments.shape}, Attention masks shape: {attention_masks.shape}")
+        if idx % 10:
+            empty_cache()
