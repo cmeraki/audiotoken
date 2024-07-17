@@ -231,6 +231,9 @@ class Wav2VecBertEncoder(torch.nn.Module):
             for _ in range(5):
                 _ = self.model(input, attention_mask=am, output_hidden_states=True)
 
+            del(input)
+            del(am)
+
     def forward(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
