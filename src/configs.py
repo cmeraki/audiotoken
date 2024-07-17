@@ -38,8 +38,8 @@ class Wav2VecBertConfig:
     model_sample_rate: int = 16_000
     single_segment_duration: int = 10
     model_token_rate: int = 50
-    output_layer: int = -1
-    quantizer_path: Optional[str] = 'data/kmeans_xs/kmeans__L-1_C1024_ckpt150.pkl'
+    output_layer: int = 19
+    quantizer_path: Optional[str] = 'data/kmeans_w2vbert2_s/kmeans__L19_C1024_ckpt1850.pkl'
     pad_token: Optional[int] = 1
 
 @dataclass

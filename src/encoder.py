@@ -196,6 +196,13 @@ class Wav2VecBertEncoder:
 
         self.model.eval()
 
+        self.layer_norm = torch.nn.LayerNorm(
+            normalized_shape=1024,
+            elementwise_affine=False,
+            bias=False,
+            device=self.device,
+        )
+
         logger.info(f'Ouput layer: {self.output_layer}')
 
         if self.quantize:
@@ -226,11 +233,11 @@ class Wav2VecBertEncoder:
 
                 embeddings = self.model.forward(input_batch, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
 
-                # logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
-
                 if self.quantize:
                     embeddings = embeddings[self.output_layer]  # B, T, D
+                    embeddings = self.layer_norm(embeddings)
 
+                    logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                     min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)

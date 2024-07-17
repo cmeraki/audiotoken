@@ -7,7 +7,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens, get_dataset_files
+from .utils import find_audio_files, save_audio_tokens, get_dataset_files, set_process_affinity
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
 
@@ -19,7 +19,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=8,
+        num_workers=6,
         prefetch_factor=2,
         pin_memory=True
     )
@@ -61,6 +61,8 @@ if __name__ == '__main__':
     """
     import argparse
     from datasets import load_dataset
+
+    set_process_affinity(os.getpid(), list(range(0, 12)))
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
