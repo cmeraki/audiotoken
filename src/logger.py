@@ -15,29 +15,32 @@ def serialize_log(record):
     # You can add more fields here if needed
     return subset
 
-def get_logger(log_file="app.log", level: str = "INFO"):
+def get_logger(log_file="app.log", level: str = "ERROR"):
 
-    os.makedirs("logs", exist_ok=True)
     logger.remove()
-
-    log_file = os.path.join("logs", log_file)
 
     format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {process.name} | {thread.id} | {level: <8} | {file}:{line} | {message}"
 
-    logger.add(
-        log_file,
-        format=format,
-        rotation="10 MB",
-        retention="1 week",
-        level=level,
-        enqueue=True,
-    )
+    if log_file:
+        os.makedirs("logs", exist_ok=True)
+        log_file = os.path.join("logs", log_file)
+
+        logger.add(
+            log_file,
+            format=format,
+            rotation="10 MB",
+            retention="1 week",
+            level="INFO",
+            enqueue=True,
+        )
 
     logger.add(
         sys.stderr,
         format=format,
-        level="ERROR",
+        level=level,
     )
+
+    return logger
 
 
 get_logger(log_file="app.log")

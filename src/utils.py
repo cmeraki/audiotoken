@@ -3,13 +3,13 @@ import torch
 import psutil
 import numpy as np
 import torchaudio
-import numpy as np
 from tqdm import tqdm
 from encodec.utils import convert_audio
 from datasets import load_dataset
 
 from .configs import AudioConfig
 from .logger import logger
+
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
@@ -39,6 +39,7 @@ def find_audio_files(folder):
     logger.info(f'Found {len(audio_files)} audio files in {folder}')
     return audio_files
 
+
 def find_files(folder, extensions):
     tokens_files = []
 
@@ -51,6 +52,7 @@ def find_files(folder, extensions):
     logger.info(f'Found {len(tokens_files)} tokens files in {folder}')
     return tokens_files
 
+
 def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir: str):
 
     try:
@@ -61,7 +63,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         # tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
 
         tokens = tokens.cpu().numpy()
-        tokens_len = audio_pointer.tokens_len # type: ignore
+        tokens_len = audio_pointer.tokens_len  # type: ignore
 
         logger.debug(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
 
@@ -78,6 +80,7 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
     except Exception as e:
         logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
 
+
 def preprocess_audio(audio, sample_rate, processor):
 
     return processor(
@@ -85,6 +88,7 @@ def preprocess_audio(audio, sample_rate, processor):
         sampling_rate=sample_rate,
         return_tensors='pt'
     ).input_values[0]
+
 
 def get_dataset_files(indir: str, hf_dataset: str):
     assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
@@ -101,7 +105,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
 
     ds = load_dataset(
         hf_dataset,
-        "s",
+        "xs",
         trust_remote_code=True,
         token=os.environ.get("HF_TOKEN"),
     )["train"]
@@ -114,6 +118,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
     del (ds)
 
     return files
+
 
 def set_process_affinity(process_id, cores):
     """

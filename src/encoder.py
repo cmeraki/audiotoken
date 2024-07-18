@@ -176,23 +176,31 @@ class HubertEncoder:
                 return embeddings
 
 
-class Wav2VecBertEncoder:
+class Wav2VecBertEncoder(torch.nn.Module):
     def __init__(
         self,
         config: Wav2VecBertConfig,
         quantize: bool = False,
         device: str = 'cpu',
-        compile: bool = True
+        compile: bool = True,
+        multi_gpu: bool = False
     ):
 
+        super().__init__()
         model_id = config.model_id
         self.segment_length = config.model_sample_rate * config.single_segment_duration
         self.device = torch.device(device)
 
         self.output_layer = config.output_layer
 
-        self.model = Wav2Vec2BertModel.from_pretrained(model_id).to(self.device)
+        self.model = Wav2Vec2BertModel.from_pretrained(model_id)
         self.quantize = quantize
+
+        if multi_gpu and torch.cuda.device_count() > 1:
+            logger.info(f"Using {torch.cuda.device_count()} GPUs")
+            self.model = torch.nn.DataParallel(self.model)
+
+        self.model.to(self.device)
 
         self.model.eval()
 
@@ -226,7 +234,7 @@ class Wav2VecBertEncoder:
             del(input)
             del(am)
 
-    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
+    def forward(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
                 logger.info(f"Batch size: {input_batch.shape}, Attention mask size: {attention_mask.shape}")
