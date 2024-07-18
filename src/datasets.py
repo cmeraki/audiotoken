@@ -1,5 +1,6 @@
 import torch
 import math
+from tqdm import tqdm
 from typing import List, Optional
 import numpy as np
 from copy import deepcopy
@@ -14,6 +15,7 @@ from .logger import logger
 def collate_fn(batch):
     segments, attention_masks, file_names = zip(*batch)
     return torch.stack(segments), torch.stack(attention_masks), file_names
+
 
 class AudioBatchDataset(IterableDataset):
     def __init__(
@@ -137,7 +139,6 @@ class AudioBatchDataset(IterableDataset):
 
 if __name__ == '__main__':
     import pdb
-    from tqdm import tqdm
     from torch.utils.data import DataLoader
     from argparse import ArgumentParser
     from functools import partial

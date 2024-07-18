@@ -19,14 +19,14 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=4,
         prefetch_factor=2,
         pin_memory=True
     )
 
     start_time = time.time()
 
-    for idx, (input_ids, attention_masks, file_pointers) in tqdm(enumerate(dataloader)):
+    for idx, (input_ids, attention_masks, file_pointers) in enumerate(dataloader):
         logger.info(f'Processing batch: {idx}')
 
         input_ids = input_ids.to(DEVICE)
