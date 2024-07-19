@@ -248,12 +248,24 @@ class OptimizedSeamlessM4TFeatureExtractor():
         features = features.T
         return features
 
+    def pad(self, arr: np.ndarray, pad_size: int, pad_value: float = 0.0):
+        N, D = arr.shape
+        P = pad_size
+
+        # Create the padded array
+        padded_array = np.pad(arr, ((0, P), (0, 0)), mode='constant', constant_values=pad_value)
+
+        # Create the attention mask
+        attention_mask = np.ones(N + P, dtype=np.int32)
+        attention_mask[N:] = 0
+
+        return padded_array, attention_mask
+
     def __call__(
         self,
         raw_speech: Union[np.ndarray],
     ):
         features = [self._extract_fbank_features(waveform) for waveform in raw_speech]
-        return features
 
         # Normalize per mel bin
         features = [
@@ -261,7 +273,32 @@ class OptimizedSeamlessM4TFeatureExtractor():
             for x in features
         ]
 
-        return features
+        padded_features = [self.pad(x, 78, 1.0) for x in features]
+        input_features = padded_features[0][0]
+        attention_mask = padded_features[0][1]
+
+        num_frames, num_channels = input_features.shape
+
+        remainder = num_frames % self.stride
+
+        if remainder != 0:
+            input_features = input_features[:, :num_frames, :]
+            attention_mask = attention_mask[:num_frames]
+
+        input_features = np.reshape(
+            input_features, (num_frames // self.stride, num_channels * self.stride)
+        )
+
+        indices = np.arange(0, num_frames)
+        attention_mask = attention_mask[indices % self.stride == 1]
+
+        padded_inputs = {}
+
+        padded_inputs["input_features"] = input_features
+        padded_inputs["attention_mask"] = attention_mask
+
+        return padded_inputs
+
 
 import torch
 from src.utils import read_audio

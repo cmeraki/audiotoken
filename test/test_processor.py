@@ -19,10 +19,13 @@ def naive_impl(a):
         a,
         sampling_rate=Wav2VecBertConfig.model_sample_rate,
         return_attention_masks=True,
-        return_tensors='pt'
+        return_tensors='pt',
+        padding=True,
+        truncation=False,
+        pad_to_multiple_of=160,
     )
 
-    return torch.from_numpy(proc[0])
+    return proc
 
 def optim_impl(a):
     a = a.numpy()
@@ -36,7 +39,7 @@ def optim_impl(a):
     )
     out = feature_extractor(a)
 
-    return torch.from_numpy(out[0])
+    return out
 
 def faster_impl(a):
     feature_extractor = FasterSeamlessM4TFeatureExtractor(
@@ -45,12 +48,13 @@ def faster_impl(a):
         padding_value=1,
         return_attention_mask=True,
         sampling_rate=16000,
-        stride=2
+        stride=2,
+        device='cuda'
     )
 
     out = feature_extractor(a.to('cuda'))
 
-    return out
+    return out.cpu()
 
 def normalize_feats(features):
     mean = features.mean(dim=0, keepdim=True)
@@ -60,6 +64,7 @@ def normalize_feats(features):
     return features
 
 if __name__ == '__main__':
+    import numpy as np
     audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
 
     o1 = naive_impl(audio)
@@ -68,5 +73,14 @@ if __name__ == '__main__':
 
     import pdb
     pdb.set_trace()
+
+    diff = torch.abs(o1 - o2)
+    print(f'Diff b/w o1, o2: {diff.mean()} {np.percentile(diff, 99)}')
+
+    diff = torch.abs(o2 - o3)
+    print(f'Diff b/w o2, o3: {diff.mean()} {np.percentile(diff, 99)}')
+
+    # import pdb
+    # pdb.set_trace()
 
     # assert o1 == o2

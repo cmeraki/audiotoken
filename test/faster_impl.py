@@ -4,6 +4,8 @@ from typing import Optional
 import math
 import pdb
 
+device = 'cuda'
+
 # Helper functions
 def hertz_to_mel(freq):
     return 1127.0 * torch.log(1.0 + (freq / 700.0))
@@ -62,9 +64,9 @@ def spectrogram(
 
     num_frames = int(1 + math.floor((waveform.shape[-1] - frame_length) / hop_length))
     num_frequency_bins = (fft_length // 2) + 1
-    spectrogram = torch.empty((num_frames, num_frequency_bins), dtype=torch.cfloat, device='cuda')
+    spectrogram = torch.empty((num_frames, num_frequency_bins), dtype=torch.cfloat, device=device)
 
-    buffer = torch.zeros(fft_length, device='cuda')
+    buffer = torch.zeros(fft_length, device=device)
 
     timestep = 0
     for frame_idx in range(num_frames):
@@ -105,7 +107,7 @@ class FasterSeamlessM4TFeatureExtractor(torch.nn.Module):
         num_mel_bins=80,
         padding_value=0.0,
         stride=2,
-        device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+        device: str = 'cpu',
         **kwargs,
     ):
         super().__init__()
@@ -147,7 +149,6 @@ class FasterSeamlessM4TFeatureExtractor(torch.nn.Module):
 
     def forward(self, raw_speech: torch.Tensor):
         features = self._extract_fbank_features(raw_speech)
-        return features
 
         # Normalize per mel bin
         mean = features.mean(dim=0, keepdim=True)
@@ -170,7 +171,7 @@ def faster_impl(a):
         stride=2
     )
 
-    out = feature_extractor(a.to('cuda'))
+    out = feature_extractor(a.to(device))
 
     return out
 
