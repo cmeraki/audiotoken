@@ -40,7 +40,7 @@ class Wav2VecBertConfig:
     model_token_rate: int = 50
     output_layer: int = 19
     quantizer_path: Optional[str] = 'data/kmeans_w2vbert2_s/kmeans__L19_C1024_ckpt1850.pkl'
-    pad_token: Optional[int] = 1
+    pad_token: Optional[int] = 0
 
 @dataclass
 class WhisperEncoderConfig:
