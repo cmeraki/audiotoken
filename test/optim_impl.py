@@ -190,7 +190,8 @@ class OptimizedSeamlessM4TFeatureExtractor():
         feature_size=80,
         sampling_rate=16000,
         num_mel_bins=80,
-        padding_value=0.0,
+        padding_value=1.0,
+        pad_to_multiple_of=2,
         stride=2,
         **kwargs,
     ):
@@ -210,6 +211,8 @@ class OptimizedSeamlessM4TFeatureExtractor():
         self.num_mel_bins = num_mel_bins
         self.return_attention_mask = True
         self.stride = stride
+        self.padding_value = padding_value
+        self.pad_to_multiple_of = pad_to_multiple_of
 
         mel_filters = mel_filter_bank(
             num_frequency_bins=256,
@@ -248,12 +251,13 @@ class OptimizedSeamlessM4TFeatureExtractor():
         features = features.T
         return features
 
-    def pad(self, arr: np.ndarray, pad_size: int, pad_value: float = 0.0):
+    def pad(self, arr: np.ndarray):
         N, D = arr.shape
-        P = pad_size
+
+        P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if self.pad_to_multiple_of > 0 else 0
 
         # Create the padded array
-        padded_array = np.pad(arr, ((0, P), (0, 0)), mode='constant', constant_values=pad_value)
+        padded_array = np.pad(arr, ((0, P), (0, 0)), mode='constant', constant_values=self.padding_value)
 
         # Create the attention mask
         attention_mask = np.ones(N + P, dtype=np.int32)
@@ -273,7 +277,7 @@ class OptimizedSeamlessM4TFeatureExtractor():
             for x in features
         ]
 
-        padded_features = [self.pad(x, 78, 1.0) for x in features]
+        padded_features = [self.pad(x) for x in features]
         input_features = padded_features[0][0]
         attention_mask = padded_features[0][1]
 
@@ -282,7 +286,7 @@ class OptimizedSeamlessM4TFeatureExtractor():
         remainder = num_frames % self.stride
 
         if remainder != 0:
-            input_features = input_features[:, :num_frames, :]
+            input_features = input_features[:num_frames, :]
             attention_mask = attention_mask[:num_frames]
 
         input_features = np.reshape(
