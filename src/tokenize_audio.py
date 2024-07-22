@@ -19,7 +19,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=4,
         prefetch_factor=2,
         pin_memory=True
     )

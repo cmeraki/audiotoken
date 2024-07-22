@@ -139,7 +139,6 @@ class AudioBatchDataset(IterableDataset):
 
 if __name__ == '__main__':
     import pdb
-    from tqdm import tqdm
     from torch.utils.data import DataLoader
     from argparse import ArgumentParser
     from functools import partial

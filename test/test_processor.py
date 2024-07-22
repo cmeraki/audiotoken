@@ -2,8 +2,8 @@ from transformers import AutoFeatureExtractor, SeamlessM4TFeatureExtractor
 
 from src.configs import Wav2VecBertConfig
 from src.utils import read_audio
-from .optim_impl import OptimizedSeamlessM4TFeatureExtractor
-from .faster_impl import FasterSeamlessM4TFeatureExtractor
+from optim_impl import OptimizedSeamlessM4TFeatureExtractor
+from faster_impl import FasterSeamlessM4TFeatureExtractor
 
 import torch
 import torch.nn.functional as F
@@ -22,7 +22,7 @@ def naive_impl(a):
         return_tensors='pt'
     )
 
-    return torch.from_numpy(proc[0])
+    # return torch.from_numpy(proc[0])
 
 def optim_impl(a):
     a = a.numpy()
@@ -52,21 +52,15 @@ def faster_impl(a):
 
     return out
 
-def normalize_feats(features):
-    mean = features.mean(dim=0, keepdim=True)
-    var = features.var(dim=0, keepdim=True, unbiased=True)
-    features = (features - mean) / torch.sqrt(var + 1e-7)
-
-    return features
-
 if __name__ == '__main__':
     audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
 
     o1 = naive_impl(audio)
     o2 = optim_impl(audio)
+    print('**********')
     o3 = faster_impl(audio)
 
     import pdb
     pdb.set_trace()
 
-    # assert o1 == o2
+    assert o1 == o2
