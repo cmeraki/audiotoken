@@ -1,5 +1,6 @@
 import numpy as np
 from typing import List, Optional, Union
+import pdb
 
 def window_function(
     window_length: int,
@@ -121,11 +122,7 @@ def spectrogram(
 
     spectrogram = spectrogram.T
 
-    print(spectrogram, spectrogram.shape)
-    print(mel_filters)
-
     if mel_filters is not None:
-        print(mel_filters.shape)
         spectrogram = np.maximum(mel_floor, np.dot(mel_filters.T, spectrogram))
 
         spectrogram = np.log(spectrogram)
@@ -233,7 +230,6 @@ class OptimizedSeamlessM4TFeatureExtractor():
         Get mel-filter bank features using TorchAudio. Note that TorchAudio requires 16-bit signed integers as inputs
         and hence the waveform should not be normalized before feature extraction.
         """
-        print(waveform)
         waveform = np.squeeze(waveform) * (2**15)  # Kaldi compliance: 16-bit signed integers
         features = spectrogram(
             waveform,
@@ -248,7 +244,8 @@ class OptimizedSeamlessM4TFeatureExtractor():
             log_mel="log",
             mel_floor=1.192092955078125e-07,
             remove_dc_offset=True,
-        ).T
+        )
+        features = features.T
         return features
 
     def __call__(
@@ -256,6 +253,7 @@ class OptimizedSeamlessM4TFeatureExtractor():
         raw_speech: Union[np.ndarray],
     ):
         features = [self._extract_fbank_features(waveform) for waveform in raw_speech]
+        return features
 
         # Normalize per mel bin
         features = [
@@ -264,3 +262,24 @@ class OptimizedSeamlessM4TFeatureExtractor():
         ]
 
         return features
+
+import torch
+from src.utils import read_audio
+
+def optim_impl(a):
+    a = a.numpy()
+    feature_extractor = OptimizedSeamlessM4TFeatureExtractor(
+        feature_size=80,
+        num_mel_bins=80,
+        padding_value=1,
+        return_attention_mask=True,
+        sampling_rate=16000,
+        stride=2
+    )
+    out = feature_extractor(a)
+
+    return torch.from_numpy(out[0])
+
+if __name__ == '__main__':
+    audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
+    o = optim_impl(audio)
