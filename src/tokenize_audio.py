@@ -137,18 +137,6 @@ if __name__ == '__main__':
             pad_token=Wav2VecBertConfig.pad_token
         )
 
-        # encoder = torch.compile(encoder) # type: ignore
-
-        # # Warmup the model, model expects dimension length to be 160
-        # input = torch.randn((32, 160000), device=DEVICE)
-        # am = torch.ones((32, 160000), device=DEVICE)
-
-        # for _ in range(5):
-        #     _ = encoder(input, am)
-
-        # del (input)
-        # del (am)
-
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 

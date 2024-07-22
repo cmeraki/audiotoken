@@ -75,7 +75,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
     def _create_spectrogram(
         self,
         waveform: torch.Tensor,
-        mask: Optional[torch.Tensor],
+        mask: torch.Tensor,
         window: torch.Tensor,
         frame_length: int,
         hop_length: int,
@@ -96,10 +96,14 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         spectrogram = torch.empty((batch_size, num_frames, num_frequency_bins), dtype=torch.cfloat, device=self.device)
         buffer = torch.zeros(batch_size, fft_length, device=self.device)
+        buffer_mask = torch.ones(batch_size, fft_length, device=self.device)
+
+        print(f'Batch size: {batch_size}, num frames: {num_frames}, num frequency bins: {num_frequency_bins}')
 
         timestep = 0
         for frame_idx in range(num_frames):
             buffer[:, :frame_length] = waveform[:, timestep : timestep + frame_length]
+            buffer_mask[:, :frame_length] = mask[:, timestep : timestep + frame_length]
 
             if remove_dc_offset:
                 buffer[:, :frame_length] = buffer[:, :frame_length] - torch.mean(buffer[:, :frame_length], dim=1, keepdim=True)
@@ -109,6 +113,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
                 buffer[:, 0] *= 1 - preemphasis
 
             buffer[:, :frame_length] *= window
+            buffer[:, :frame_length] *= buffer_mask[:, :frame_length]
 
             spectrogram[:, frame_idx] = torch.fft.rfft(buffer)
             timestep += hop_length
@@ -116,12 +121,9 @@ class Wav2VecBertProcessor(torch.nn.Module):
         # Compute power spectrogram
         spectrogram = spectrogram.abs().pow(power)
 
-        # TODO: Apply mask on the spectogram
-        if mask is not None:
-            pass
-
         # Apply mel filterbank
         spectrogram = torch.matmul(spectrogram, mel_filters)
+        # TODO: Handle mask appropriately here
         spectrogram = torch.maximum(spectrogram, torch.tensor(mel_floor, dtype=torch.float32))
 
         # Apply log
@@ -145,7 +147,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         return padded_array, attention_mask
 
-    def forward(self, raw_speech: torch.Tensor, mask: Optional[torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, raw_speech: torch.Tensor, mask: torch.Tensor) -> Dict[str, torch.Tensor]:
 
         assert len(raw_speech.shape) == 2, "Input tensor must have shape [batch, time]"
 
@@ -246,7 +248,7 @@ if __name__ == '__main__':
 
     start_time = time.time()
     batched_out = batched_feature_extractor(
-        tensor_audio_filesam=torch.ones_like(a, device=device)
+        tensor_audio_files, torch.ones_like(tensor_audio_files, device=device)
     )
     torch.cuda.synchronize()
 
