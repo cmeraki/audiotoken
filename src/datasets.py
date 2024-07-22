@@ -70,11 +70,11 @@ class AudioBatchDataset(IterableDataset):
 
             logger.info(f"Worker {worker_id} processing files {iter_start} to {iter_end}")
 
-        self.files_processed += 1
-        self.pbar.n = self.files_processed.item()
-        self.pbar.refresh()
-
         for idx in range(iter_start, iter_end):
+            self.files_processed += 1
+            self.pbar.n = self.files_processed.item()
+            self.pbar.refresh()
+
             file_path = str(self.audio_files[idx], encoding='utf-8')
             # file_path = self.audio_files[idx]
             waveform = read_audio(file_path, self.sample_rate)
@@ -134,14 +134,12 @@ class AudioBatchDataset(IterableDataset):
                     segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
 
                 yield segment, attention_mask, deepcopy(audio_config)
-    def __del__(self):
-        self.pbar.close()
-
 
         self.pbar.close()
 
 if __name__ == '__main__':
     import pdb
+    from tqdm import tqdm
     from torch.utils.data import DataLoader
     from argparse import ArgumentParser
     from functools import partial
