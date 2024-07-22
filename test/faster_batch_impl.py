@@ -1,8 +1,10 @@
 import pdb
 import math
 import torch
-from typing import Optional
 import torch.nn.functional as F
+
+torch.manual_seed(0)
+torch.use_deterministic_algorithms(True)
 
 # Helper functions
 def hertz_to_mel(freq):
@@ -52,15 +54,16 @@ class W2VBert2Processor(torch.nn.Module):
         device: str = 'cpu',
     ):
         super().__init__()
-        self.num_mel_bins = num_mel_bins
+
+        self.device = device
+
         self.stride = stride
         self.padding_value = padding_value
-        self.device = device
         self.pad_to_multiple_of = pad_to_multiple_of
 
         mel_filters = mel_filter_bank(
             num_frequency_bins=256,
-            num_mel_filters=self.num_mel_bins,
+            num_mel_filters=num_mel_bins,
             min_frequency=20,
             max_frequency=sampling_rate // 2,
             sampling_rate=sampling_rate,
@@ -84,29 +87,39 @@ class W2VBert2Processor(torch.nn.Module):
         remove_dc_offset: bool = True,
     ) -> torch.Tensor:
 
-        waveform = waveform.squeeze(0)
+        batch_size, num_samples = waveform.shape
 
-        num_frames = int(1 + math.floor((waveform.shape[-1] - frame_length) / hop_length))
+        num_frames = int(1 + math.floor((num_samples - frame_length) / hop_length))
         num_frequency_bins = (fft_length // 2) + 1
 
-        spectrogram = torch.empty((num_frames, num_frequency_bins), dtype=torch.cfloat, device=self.device)
-        buffer = torch.zeros(fft_length, device=self.device)
+        spectrogram = torch.empty((batch_size, num_frames, num_frequency_bins), dtype=torch.cfloat, device=self.device)
+        buffer = torch.zeros(batch_size, fft_length, device=self.device)
+
+        # print(waveform[0].mean())
 
         timestep = 0
         for frame_idx in range(num_frames):
-            buffer[:frame_length] = waveform[timestep : timestep + frame_length]
+            buffer[:, :frame_length] = waveform[:, timestep : timestep + frame_length]
 
+            # print(frame_idx, 0, buffer[0, :frame_length].mean())
             if remove_dc_offset:
-                buffer[:frame_length] = buffer[:frame_length] - buffer[:frame_length].mean()
+                buffer[:, :frame_length] = buffer[:, :frame_length] - torch.mean(buffer[:, :frame_length], dim=1, keepdim=True)
 
+            # print(frame_idx, 1, buffer[0, :frame_length].mean())
             if preemphasis is not None:
-                buffer[1:frame_length] -= preemphasis * buffer[: frame_length - 1]
-                buffer[0] *= 1 - preemphasis
+                buffer[:, 1:frame_length] -= preemphasis * buffer[:, : frame_length - 1]
+                buffer[:, 0] *= 1 - preemphasis
 
-            buffer[:frame_length] *= window
+            # print(frame_idx, 2, buffer[0, :frame_length].mean())
+            buffer[:, :frame_length] *= window
 
-            spectrogram[frame_idx] = torch.fft.rfft(buffer)
+            # print(frame_idx, 3, buffer[0, :frame_length].mean())
+            spectrogram[:, frame_idx] = torch.fft.rfft(buffer)
+
+            # print(frame_idx, 4, buffer[0, :frame_length].mean())
             timestep += hop_length
+
+        # print(spectrogram[0])
 
         # Compute power spectrogram
         spectrogram = spectrogram.abs().pow(power)
@@ -139,7 +152,7 @@ class W2VBert2Processor(torch.nn.Module):
         return features
 
     def _pad(self, arr: torch.Tensor):
-        N, D = arr.shape
+        B, N, D = arr.shape
 
         P = 0
         if self.pad_to_multiple_of > 0:
@@ -149,36 +162,34 @@ class W2VBert2Processor(torch.nn.Module):
         padded_array = F.pad(arr, (0, 0, 0, P), mode='constant', value=self.padding_value)
 
         # Create the attention mask
-        attention_mask = torch.ones(N + P, dtype=torch.int32, device=arr.device)
-        attention_mask[N:] = 0
+        attention_mask = torch.ones(B, N + P, dtype=torch.int32, device=arr.device)
+        attention_mask[:, N:] = 0
 
         return padded_array, attention_mask
 
     def forward(self, raw_speech: torch.Tensor):
+
+        assert len(raw_speech.shape) == 2, "Input tensor must have shape [batch, time]"
+
         features = self._extract_fbank_features(raw_speech)
 
         # Normalize per mel bin
-        mean = features.mean(dim=0, keepdim=True)
-        var = features.var(dim=0, keepdim=True, unbiased=True)
+        mean = features.mean(dim=1, keepdim=True)
+        var = features.var(dim=1, keepdim=True, unbiased=True)
         features = (features - mean) / torch.sqrt(var + 1e-7)
 
-        padded_features = self._pad(features)
-        input_features = padded_features[0]
-        attention_mask = padded_features[1]
-
-        num_frames, num_channels = input_features.shape
+        batch_size, num_frames, num_channels = features.shape
 
         remainder = num_frames % self.stride
 
         if remainder != 0:
-            input_features = input_features[:num_frames, :]
-            attention_mask = attention_mask[:num_frames]
+            features = features[:, :num_frames-remainder, :]
 
-        input_features = input_features.reshape(
-            num_frames // self.stride, num_channels * self.stride
+        features = features.reshape(
+            batch_size, (num_frames-remainder) // self.stride, num_channels * self.stride
         )
 
-        attention_mask = attention_mask[torch.arange(0, num_frames, device=attention_mask.device) % self.stride == 1]
+        input_features, attention_mask = self._pad(features)
 
         padded_inputs = {
             "input_features": input_features,
@@ -188,23 +199,78 @@ class W2VBert2Processor(torch.nn.Module):
         return padded_inputs
 
 if __name__ == '__main__':
+    import time
     import torch
-    from src.utils import read_audio
+    from tqdm import tqdm
+    from src.utils import read_audio, find_audio_files
 
     device = 'cuda'
-    audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
+    audio_files = find_audio_files('./data/test-clean/LibriSpeech/test-clean/')
 
-    feature_extractor = W2VBert2Processor(
+    # print(audio_files[0])
+    batched_audio_files = []
+    for a in audio_files:
+        audio = read_audio(a, 16_000) # type: ignore
+        audio = audio.squeeze(0)[:16_000]
+
+        if audio.shape[0] < 16_000:
+            audio = torch.cat([audio, torch.zeros(16_000 - audio.shape[0])])
+
+        batched_audio_files.append(audio)
+
+    tensor_audio_files = torch.stack(batched_audio_files).to(device)
+    print(f'Batched audio files shape: {tensor_audio_files.shape}')
+
+    batched_feature_extractor = W2VBert2Processor(
         feature_size=80,
         num_mel_bins=80,
         sampling_rate=16000,
         stride=2,
         padding_value=1,
+        pad_to_multiple_of=500,
         device=device,
     )
 
-    o = feature_extractor(
-        audio.to(device)
+    start_time = time.time()
+    batched_out = batched_feature_extractor(
+        tensor_audio_files
+    )
+    torch.cuda.synchronize()
+    print(f'Batched feature extraction time: {time.time() - start_time:.2f}s')
+
+    print(f'Batched input features shape: {batched_out["input_features"].shape}')
+
+    from .faster_impl import W2VBert2Processor as SimpleW2VBert2Processor
+
+    feature_extractor = SimpleW2VBert2Processor(
+        feature_size=80,
+        num_mel_bins=80,
+        sampling_rate=16000,
+        stride=2,
+        padding_value=1,
+        pad_to_multiple_of=1000,
+        device=device,
     )
 
-    print(f'Shape: {o["input_features"].shape}, {o["attention_mask"].shape}')
+    # start_time = time.time()
+    # for idx, audio in enumerate(batched_audio_files):
+    #     single_out = feature_extractor(audio.to(device))
+
+    # torch.cuda.synchronize()
+    # print(f'Single feature extraction time: {time.time() - start_time:.2f}s')
+
+    for idx, audio in tqdm(enumerate(batched_audio_files)):
+        single_out = feature_extractor(audio.to(device))
+
+        i1, a1 = batched_out['input_features'][idx], batched_out['attention_mask'][idx]
+        i2, a2 = single_out['input_features'], single_out['attention_mask']
+
+        if (i1-i2).abs().max().item() > 1e-5:
+            print(f'Diff: {(i1-i2).abs().mean(), (i1-i2).abs().max()}')
+
+        try:
+            assert torch.allclose(i1, i2, rtol=0, atol=1e-5), f'Input features are not equal for audio file {idx}'
+            assert torch.allclose(a1, a2, rtol=0, atol=0), f'Attention mask are not equal for audio file {idx}'
+        except Exception as e:
+            print(f'Error: {e}')
+            # pdb.set_trace()

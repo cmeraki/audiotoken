@@ -254,7 +254,9 @@ class OptimizedSeamlessM4TFeatureExtractor():
     def pad(self, arr: np.ndarray):
         N, D = arr.shape
 
-        P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if self.pad_to_multiple_of > 0 else 0
+        P = 0
+        if self.pad_to_multiple_of > 0:
+            P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if N % self.pad_to_multiple_of > 0 else 0
 
         # Create the padded array
         padded_array = np.pad(arr, ((0, P), (0, 0)), mode='constant', constant_values=self.padding_value)
@@ -319,8 +321,9 @@ def optim_impl(a):
     )
     out = feature_extractor(a)
 
-    return torch.from_numpy(out[0])
+    return out
 
 if __name__ == '__main__':
-    audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
+    audio = read_audio('./data/test-clean/LibriSpeech/test-clean/7021/85628/7021-85628-0005.flac', 16_000) # type: ignore
     o = optim_impl(audio)
+    print(f'Shape: {o["input_features"].shape}, {o["attention_mask"].shape}')

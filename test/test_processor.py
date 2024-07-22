@@ -17,10 +17,10 @@ def naive_impl(a):
         return_tensors='pt',
         padding=True,
         truncation=False,
-        pad_to_multiple_of=2,
+        pad_to_multiple_of=500,
     )
 
-    return out['input_features'], out['attention_mask']
+    return out['input_features'][0], out['attention_mask'][0]
 
 def optim_impl(a):
     a = a.numpy()
@@ -30,6 +30,7 @@ def optim_impl(a):
         padding_value=1,
         return_attention_mask=True,
         sampling_rate=16000,
+        pad_to_multiple_of=500,
         stride=2
     )
     out = feature_extractor(a)
@@ -43,6 +44,7 @@ def faster_impl(a):
         padding_value=1,
         sampling_rate=16000,
         stride=2,
+        pad_to_multiple_of=500,
         device='cuda'
     )
 
@@ -51,9 +53,11 @@ def faster_impl(a):
     return out['input_features'].detach().cpu(), out['attention_mask'].detach().cpu()
 
 if __name__ == '__main__':
+    import os
     import time
     import argparse
     import numpy as np
+    from tqdm import tqdm
 
     from src.utils import read_audio, find_audio_files
 
@@ -62,32 +66,55 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    audio_files = find_audio_files(args.indir)
+    if os.path.isfile(args.indir):
+        audio_files = [args.indir]
 
-    for audio_path in audio_files:
+    else:
+        audio_files = find_audio_files(args.indir)
+
+    print(f'Found {len(audio_files)} audio files')
+
+    hf_speed = []
+    cpu_speed = []
+    gpu_speed = []
+
+    for audio_path in tqdm(audio_files):
         audio = read_audio(audio_path, 16_000) # type: ignore
 
-        start_time = time.time()
-        i1, a1 = naive_impl(audio)
-        print(f'Naive: {time.time() - start_time}')
+        try:
+            start_time = time.time()
+            i1, a1 = naive_impl(audio)
+            hf_speed.append(time.time() - start_time)
 
-        start_time = time.time()
-        i2, a2 = optim_impl(audio)
-        print(f'Optim: {time.time() - start_time}')
+            start_time = time.time()
+            i2, a2 = optim_impl(audio)
+            cpu_speed.append(time.time() - start_time)
 
-        start_time = time.time()
-        i3, a3 = faster_impl(audio)
-        torch.cuda.synchronize()
-        print(f'Faster: {time.time() - start_time}')
+            start_time = time.time()
+            i3, a3 = faster_impl(audio)
+            torch.cuda.synchronize()
+            gpu_speed.append(time.time() - start_time)
 
-        diff = torch.abs(i1[0] - i2)
-        print(f'Diff b/w i1, i2: {diff.mean()} {np.percentile(diff, 99)}')
+            # pdb.set_trace()
 
-        diff = torch.abs(a1[0] - a2).to(torch.float32)
-        print(f'Diff b/w a1, a2: {diff.mean()} {np.percentile(diff, 99)}')
+            diff = torch.abs(i1 - i2)
 
-        diff = torch.abs(i2 - i3)
-        print(f'Diff b/w i2, i3: {diff.mean()} {np.percentile(diff, 99)}')
+            if diff.mean().item():
+                print(f'Diff b/w i1, i2: {diff.mean()} {np.percentile(diff, 99)}')
 
-        diff = torch.abs(a2 - a3).to(torch.float32)
-        print(f'Diff b/w a2, a3: {diff.mean()} {np.percentile(diff, 99)}')
+            diff = torch.abs(a1 - a2).to(torch.float32)
+            if diff.mean().item():
+                print(f'Diff b/w a1, a2: {diff.mean()} {np.percentile(diff, 99)}')
+
+            diff = torch.abs(i2 - i3)
+            if diff.mean().item() > 2e-6:
+                print(f'Diff b/w i2, i3: {diff.mean()} {np.percentile(diff, 99)}')
+
+            diff = torch.abs(a2 - a3).to(torch.float32)
+            if diff.mean().item():
+                print(f'Diff b/w a2, a3: {diff.mean()} {np.percentile(diff, 99)}')
+
+        except Exception as e:
+            print(f'Error in {audio_path}: {e}')
+
+    print(f'HF: {np.mean(hf_speed)}, CPU: {np.mean(cpu_speed)}, GPU: {np.mean(gpu_speed)}')
