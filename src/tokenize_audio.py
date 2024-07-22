@@ -19,7 +19,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
+        num_workers=2,
         prefetch_factor=2,
         pin_memory=True
     )
@@ -140,6 +140,29 @@ if __name__ == '__main__':
             post_transform=post_transform_func,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
+        )
+
+    elif args.tokenizer == 'whisper':
+        from transformers import WhisperFeatureExtractor
+        from .encoder import WhisperEncoder, whisper_processor
+        from .configs import WhisperEncoderConfig
+
+        encoder = WhisperEncoder(  # type: ignore
+            config=WhisperEncoderConfig(),
+            quantize=True,
+            device=DEVICE
+        )
+
+        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
+        post_transform_func = partial(whisper_processor, processor=processor)
+
+        dataset = AudioBatchDataset(
+            files,
+            sample_rate=WhisperEncoderConfig.model_sample_rate,
+            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
+            post_transform=post_transform_func,
+            model_token_rate=WhisperEncoderConfig.model_token_rate,
+            pad_token=WhisperEncoderConfig.pad_token
         )
 
     outdir = Path(args.outdir)
