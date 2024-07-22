@@ -155,35 +155,48 @@ class W2VBert2Processor(torch.nn.Module):
         return padded_array, attention_mask
 
     def forward(self, raw_speech: torch.Tensor):
-        features = self._extract_fbank_features(raw_speech)
 
-        # Normalize per mel bin
-        mean = features.mean(dim=0, keepdim=True)
-        var = features.var(dim=0, keepdim=True, unbiased=True)
-        features = (features - mean) / torch.sqrt(var + 1e-7)
+        if len(raw_speech.shape) > 1:
+            speech = raw_speech
+        else:
+            speech = raw_speech.unsqueeze(0)
 
-        padded_features = self._pad(features)
-        input_features = padded_features[0]
-        attention_mask = padded_features[1]
-
-        num_frames, num_channels = input_features.shape
-
-        remainder = num_frames % self.stride
-
-        if remainder != 0:
-            input_features = input_features[:num_frames, :]
-            attention_mask = attention_mask[:num_frames]
-
-        input_features = input_features.reshape(
-            num_frames // self.stride, num_channels * self.stride
-        )
-
-        attention_mask = attention_mask[torch.arange(0, num_frames, device=attention_mask.device) % self.stride == 1]
-
-        padded_inputs = {
-            "input_features": input_features,
-            "attention_mask": attention_mask
+        padded_inputs = { # type: ignore
+            "input_features": [],
+            "attention_mask": []
         }
+
+        for s in speech:
+            features = self._extract_fbank_features(s)
+
+            # Normalize per mel bin
+            mean = features.mean(dim=0, keepdim=True)
+            var = features.var(dim=0, keepdim=True, unbiased=True)
+            features = (features - mean) / torch.sqrt(var + 1e-7)
+
+            padded_features = self._pad(features)
+            input_features = padded_features[0]
+            attention_mask = padded_features[1]
+
+            num_frames, num_channels = input_features.shape
+
+            remainder = num_frames % self.stride
+
+            if remainder != 0:
+                input_features = input_features[:num_frames, :]
+                attention_mask = attention_mask[:num_frames]
+
+            input_features = input_features.reshape(
+                num_frames // self.stride, num_channels * self.stride
+            )
+
+            attention_mask = attention_mask[torch.arange(0, num_frames, device=attention_mask.device) % self.stride == 1]
+
+            padded_inputs['input_features'].append(input_features)
+            padded_inputs['attention_mask'].append(attention_mask)
+
+        padded_inputs['input_features'] = torch.stack(padded_inputs['input_features'], dim=0) # type: ignore
+        padded_inputs['attention_mask'] = torch.stack(padded_inputs['attention_mask'], dim=0) # type: ignore
 
         return padded_inputs
 

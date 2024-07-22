@@ -271,37 +271,46 @@ class OptimizedSeamlessM4TFeatureExtractor():
         self,
         raw_speech: Union[np.ndarray],
     ):
-        features = [self._extract_fbank_features(waveform) for waveform in raw_speech]
+        padded_inputs = {  # type: ignore
+            "input_features": [],
+            "attention_mask": []
+        }
 
-        # Normalize per mel bin
-        features = [
-            (x - np.expand_dims(x.mean(0), 0)) / np.sqrt(np.expand_dims(x.var(0, ddof=1), 0) + 1e-7)
-            for x in features
-        ]
+        if len(raw_speech.shape) > 1:
+            speech = raw_speech
+        else:
+            speech = np.expand_dims(raw_speech, 0)
 
-        padded_features = [self.pad(x) for x in features]
-        input_features = padded_features[0][0]
-        attention_mask = padded_features[0][1]
+        for w in speech:
+            features = self._extract_fbank_features(w)
 
-        num_frames, num_channels = input_features.shape
+            # Normalize per mel bin
+            features = (features - np.expand_dims(features.mean(0), 0)) / np.sqrt(np.expand_dims(features.var(0, ddof=1), 0) + 1e-7)
 
-        remainder = num_frames % self.stride
+            padded_features = self.pad(features)
+            input_features = padded_features[0]
+            attention_mask = padded_features[1]
 
-        if remainder != 0:
-            input_features = input_features[:num_frames, :]
-            attention_mask = attention_mask[:num_frames]
+            num_frames, num_channels = input_features.shape
 
-        input_features = np.reshape(
-            input_features, (num_frames // self.stride, num_channels * self.stride)
-        )
+            remainder = num_frames % self.stride
 
-        indices = np.arange(0, num_frames)
-        attention_mask = attention_mask[indices % self.stride == 1]
+            if remainder != 0:
+                input_features = input_features[:num_frames, :]
+                attention_mask = attention_mask[:num_frames]
 
-        padded_inputs = {}
+            input_features = np.reshape(
+                input_features, (num_frames // self.stride, num_channels * self.stride)
+            )
 
-        padded_inputs["input_features"] = input_features
-        padded_inputs["attention_mask"] = attention_mask
+            indices = np.arange(0, num_frames)
+            attention_mask = attention_mask[indices % self.stride == 1]
+
+            padded_inputs["input_features"].append(input_features)
+            padded_inputs["attention_mask"].append(attention_mask)
+
+        padded_inputs['input_features'] = np.stack(padded_inputs['input_features'], axis=0) # type: ignore
+        padded_inputs['attention_mask'] = np.stack(padded_inputs['attention_mask'], axis=0) # type: ignore
 
         return padded_inputs
 

@@ -87,15 +87,13 @@ if __name__ == '__main__':
             hf_speed.append(time.time() - start_time)
 
             start_time = time.time()
-            i2, a2 = optim_impl(audio)
+            i2, a2 = optim_impl(audio[0])
             cpu_speed.append(time.time() - start_time)
 
             start_time = time.time()
-            i3, a3 = faster_impl(audio)
+            i3, a3 = faster_impl(audio[0])
             torch.cuda.synchronize()
             gpu_speed.append(time.time() - start_time)
-
-            # pdb.set_trace()
 
             diff = torch.abs(i1 - i2)
 
@@ -117,4 +115,5 @@ if __name__ == '__main__':
         except Exception as e:
             print(f'Error in {audio_path}: {e}')
 
+    pdb.set_trace()
     print(f'HF: {np.mean(hf_speed)}, CPU: {np.mean(cpu_speed)}, GPU: {np.mean(gpu_speed)}')

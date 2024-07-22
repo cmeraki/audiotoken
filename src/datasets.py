@@ -183,18 +183,13 @@ if __name__ == '__main__':
         )
 
     elif args.tokenizer == 'w2vbert2':
-        from transformers import AutoFeatureExtractor
         from .encoder import w2vbert2_processor
         from .configs import Wav2VecBertConfig
-
-        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
-            post_transform=post_transform_func,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )
