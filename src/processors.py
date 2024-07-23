@@ -5,6 +5,10 @@ import torch.nn.functional as F
 
 from src.utils import hertz_to_mel, mel_to_hertz, create_triangular_filter_bank
 
+torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
+
 def mel_filter_bank(
     num_frequency_bins: int,
     num_mel_filters: int,
@@ -72,20 +76,78 @@ class Wav2VecBertProcessor(torch.nn.Module):
         self.register_buffer('mel_filters', F.pad(mel_filters, (0, 0, 0, 1)))
         self.register_buffer('window', window)
 
+    def _create_spectrogram_mask(
+        self,
+        mask: torch.Tensor,
+        num_frames: int,
+        num_frequency_bins: int,
+        **kwargs
+    ) -> torch.Tensor:
+        """
+        Create a mask that matches the time resolution of the spectrogram
+
+        Args:
+            mask (torch.Tensor)
+            num_frames (int)
+            num_frequency_bins (int)
+        Returns:
+            torch.Tensor (shape: [batch_size, num_frames, num_frequency_bins])
+        """
+        frame_length = kwargs.get('frame_length', 400)
+        hop_length = kwargs.get('hop_length', 160)
+
+        # Reshape mask to match spectrogram time resolution
+        # The shape of the mask here will be: (batch_size, num_frames)
+        mask_downsampled = F.avg_pool1d(
+            mask.unsqueeze(1),
+            kernel_size=frame_length,
+            stride=hop_length,
+            padding=0
+        ).squeeze(1)[:, :num_frames]
+        mask_downsampled = torch.where(mask_downsampled == 1, mask_downsampled, 0)
+
+        # Expand the mask to cover all frequency bins
+        # The expanded mask shape will be: (batch_size, num_frames, num_frequency_bins)
+        # The mask will be expanded with the same value to all the frequency_bins
+        mask_expanded = mask_downsampled.unsqueeze(-1).expand(-1, -1, num_frequency_bins)
+
+        return mask_expanded
+
+    def _compute_masked_mean_var(self, x: torch.Tensor, mask: torch.Tensor) -> tuple:
+        """
+        Compute the mean and variance of the input tensor x using the mask
+
+        Args:
+            x (torch.Tensor)
+            mask (torch.Tensor)
+
+        Returns:
+            torch.Tensor
+        """
+        masked_x: torch.Tensor = x * mask
+        sum_x = torch.sum(masked_x, dim=1, keepdims=True) # type: ignore
+        count_valid = torch.sum(mask, dim=1, keepdims=True) # type: ignore
+
+        mean_x = sum_x / count_valid.clamp(min=1)
+        var_x = ((masked_x - mean_x) ** 2 * mask).sum(dim=1, keepdim=True) / count_valid.clamp(min=1)
+
+        return mean_x, var_x
+
     def _create_spectrogram(
         self,
         waveform: torch.Tensor,
-        mask: torch.Tensor,
         window: torch.Tensor,
-        frame_length: int,
-        hop_length: int,
-        fft_length: int,
-        power: float,
-        preemphasis: float,
         mel_filters: torch.Tensor,
-        mel_floor: float = 1.192092955078125e-07,
-        remove_dc_offset: bool = True,
+        **kwargs
     ) -> torch.Tensor:
+
+        frame_length = kwargs.get('frame_length', 400)
+        hop_length = kwargs.get('hop_length', 160)
+        fft_length = kwargs.get('fft_length', 512)
+        power = kwargs.get('power', 2)
+        preemphasis = kwargs.get('preemphasis')
+        mel_floor = kwargs.get('mel_floor')
+        remove_dc_offset = kwargs.get('remove_dc_offset')
 
         # Kaldi compliance: 16-bit signed integers
         waveform = waveform * (2**15)
@@ -96,14 +158,10 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         spectrogram = torch.empty((batch_size, num_frames, num_frequency_bins), dtype=torch.cfloat, device=self.device)
         buffer = torch.zeros(batch_size, fft_length, device=self.device)
-        buffer_mask = torch.ones(batch_size, fft_length, device=self.device)
-
-        print(f'Batch size: {batch_size}, num frames: {num_frames}, num frequency bins: {num_frequency_bins}')
 
         timestep = 0
         for frame_idx in range(num_frames):
             buffer[:, :frame_length] = waveform[:, timestep : timestep + frame_length]
-            buffer_mask[:, :frame_length] = mask[:, timestep : timestep + frame_length]
 
             if remove_dc_offset:
                 buffer[:, :frame_length] = buffer[:, :frame_length] - torch.mean(buffer[:, :frame_length], dim=1, keepdim=True)
@@ -113,7 +171,6 @@ class Wav2VecBertProcessor(torch.nn.Module):
                 buffer[:, 0] *= 1 - preemphasis
 
             buffer[:, :frame_length] *= window
-            buffer[:, :frame_length] *= buffer_mask[:, :frame_length]
 
             spectrogram[:, frame_idx] = torch.fft.rfft(buffer)
             timestep += hop_length
@@ -123,7 +180,6 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         # Apply mel filterbank
         spectrogram = torch.matmul(spectrogram, mel_filters)
-        # TODO: Handle mask appropriately here
         spectrogram = torch.maximum(spectrogram, torch.tensor(mel_floor, dtype=torch.float32))
 
         # Apply log
@@ -131,19 +187,20 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         return spectrogram
 
-    def _pad(self, arr: torch.Tensor):
+    def _pad(self, arr: torch.Tensor, mask: torch.Tensor) -> tuple:
         B, N, D = arr.shape
 
         P = 0
         if self.pad_to_multiple_of > 0:
             P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if N % self.pad_to_multiple_of > 0 else 0
 
-        # Create the padded array
-        padded_array = F.pad(arr, (0, 0, 0, P), mode='constant', value=self.padding_value)
+        # Create the padded array after applying the original mask provided
+        padded_array = torch.where(mask == 0, self.padding_value, arr)
+        padded_array = F.pad(padded_array, (0, 0, 0, P), mode='constant', value=self.padding_value)
 
-        # Create the attention mask
-        attention_mask = torch.ones(B, N + P, dtype=torch.int32, device=arr.device)
-        attention_mask[:, N:] = 0
+        # Create the padded attention mask using the original mask provided
+        attention_mask = F.pad(mask[:, :, 0], (0, P), mode='constant', value=0)
+        attention_mask = torch.where(attention_mask == 1, attention_mask, 0)
 
         return padded_array, attention_mask
 
@@ -151,23 +208,32 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         assert len(raw_speech.shape) == 2, "Input tensor must have shape [batch, time]"
 
+        spectrogram_config = {
+            "frame_length": 400,
+            "hop_length": 160,
+            "fft_length": 512,
+            "power": 2.0,
+            "preemphasis": 0.97,
+            "mel_floor": 1.192092955078125e-07,
+            "remove_dc_offset": True,
+        }
+
         features = self._create_spectrogram(
             raw_speech,
-            mask,
-            self.window,
-            frame_length=400,
-            hop_length=160,
-            fft_length=512,
-            power=2.0,
-            preemphasis=0.97,
+            window=self.window,
             mel_filters=self.mel_filters,
-            mel_floor=1.192092955078125e-07,
-            remove_dc_offset=True,
+            **spectrogram_config
         )
 
-        # Normalize per mel bin
-        mean = features.mean(dim=1, keepdim=True)
-        var = features.var(dim=1, keepdim=True, unbiased=True)
+        spectrogram_mask = self._create_spectrogram_mask(
+            mask=mask,
+            num_frames=features.shape[1],
+            num_frequency_bins=features.shape[2],
+            **spectrogram_config
+        )
+
+        # Normalize per mel bin and mask the features
+        mean, var = self._compute_masked_mean_var(features, spectrogram_mask)
         features = (features - mean) / torch.sqrt(var + 1e-7)
 
         batch_size, num_frames, num_channels = features.shape
@@ -176,12 +242,16 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         if remainder != 0:
             features = features[:, :num_frames-remainder, :]
+            spectrogram_mask = spectrogram_mask[:, :num_frames-remainder, :]
 
         features = features.reshape(
             batch_size, (num_frames-remainder) // self.stride, num_channels * self.stride
         )
+        spectrogram_mask = spectrogram_mask.reshape(
+            batch_size, (num_frames-remainder) // self.stride, num_channels * self.stride
+        )
 
-        input_features, attention_mask = self._pad(features)
+        input_features, attention_mask = self._pad(features, spectrogram_mask)
 
         padded_inputs = {
             "input_features": input_features,
@@ -217,21 +287,27 @@ if __name__ == '__main__':
     audio_files = find_audio_files(args.indir)
 
     batched_audio_files = []
+    batch_attention_masks = []
     np_audio_files = []
 
-    # Clipping to 1 seconds
+    # Clipping to 10 seconds
     for a in audio_files:
         audio = read_audio(a, 16_000) # type: ignore
-        audio = audio.squeeze(0)[:16_000]
+        audio = audio.squeeze(0)[:160_000]
+        attention_mask = torch.ones_like(audio)
 
-        if audio.shape[0] < 16_000:
-            audio = torch.cat([audio, torch.zeros(16_000 - audio.shape[0])])
-
-        batched_audio_files.append(audio)
         np_audio_files.append(audio.numpy())
 
-    np_audio_files = np.array(np_audio_files) # type: ignore
+        if audio.shape[0] < 160_000:
+            audio = torch.cat([audio, torch.zeros(160_000 - audio.shape[0])])
+            attention_mask = torch.cat([attention_mask, torch.zeros(160_000 - attention_mask.shape[0])])
+
+        batched_audio_files.append(audio)
+        batch_attention_masks.append(attention_mask)
+
     tensor_audio_files = torch.stack(batched_audio_files).to(device)
+    tensor_attention_masks = torch.stack(batch_attention_masks).to(device)
+
     print(f'Batched audio files shape: {tensor_audio_files.shape}')
 
     # Testing custom implementation
@@ -248,7 +324,7 @@ if __name__ == '__main__':
 
     start_time = time.time()
     batched_out = batched_feature_extractor(
-        tensor_audio_files, torch.ones_like(tensor_audio_files, device=device)
+        tensor_audio_files, tensor_attention_masks
     )
     torch.cuda.synchronize()
 
