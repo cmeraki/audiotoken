@@ -2,6 +2,7 @@ import io
 import os
 import torch
 import psutil
+import zipfile
 import tarfile
 import numpy as np
 import torchaudio
@@ -57,16 +58,42 @@ def process_audio_chunks(tar, member, chunk_length: int = 10, model_sample_rate:
         yield audio, member.name, start_frame, end_frame
 
 
+def iterate_zip(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
+    """
+    Given a zip file, this function reads a single audio file
+    at once and returns the raw bytes of the audio file
+
+    Args:
+        x (os.PathLike)
+
+    Yields:
+        Generator[tuple[IO[bytes], str], None, None]
+    """
+    with zipfile.ZipFile(x, 'r') as zip_file:
+        for file_info in zip_file.infolist():
+            if file_info.is_dir():
+                continue
+
+            file_content = zip_file.open(file_info.filename)
+            file_name = file_info.filename
+
+            if file_content is None:
+                logger.error(f"Error extracting file {file_info.filename} from {x}")
+                continue
+
+            yield file_content, file_name
+
+
 def iterate_tar(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
     """
     Given a tar file, this function reads a single audio file
     at once and returns the raw bytes of the audio file
 
     Args:
-        x (os.PathLike
+        x (os.PathLike)
 
     Yields:
-        Generator[IO[bytes]]
+        Generator[tuple[IO[bytes], str], None, None]
     """
     with tarfile.open(x, 'r') as tar:
         for member in tar.getmembers():
@@ -151,8 +178,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
     assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
 
     if indir and os.path.isdir(indir):
-        # return find_audio_files(indir)
-        return find_files(indir, ('.tar', '.tar.gz', '.tgz'))
+        return find_audio_files(indir)
 
     elif indir and not os.path.isdir(indir):
         return [indir]

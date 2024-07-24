@@ -7,10 +7,10 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens, get_dataset_files, set_process_affinity
+from .utils import save_audio_tokens, find_files, set_process_affinity
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
-
+from .configs import AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -60,7 +60,7 @@ if __name__ == '__main__':
         --device cuda:0
     """
     import argparse
-    from datasets import load_dataset
+    import random
 
     set_process_affinity(os.getpid(), list(range(0, 12)))
 
@@ -77,7 +77,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    files = get_dataset_files(args.indir, args.hf_dataset)
+    ALL_EXTS = AUDIO_EXTS + TAR_EXTS + ZIP_EXTS
+    files = find_files(args.indir, ALL_EXTS)
+    files = random.shuffle(files)
+
     logger.info(f'Found {len(files)} audio files in the dataset.')
 
     if args.tokenizer == 'encodec':

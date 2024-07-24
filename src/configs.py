@@ -4,6 +4,10 @@ from dataclasses import dataclass
 
 from huggingface_hub import hf_hub_download
 
+AUDIO_EXTS = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
+TAR_EXTS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz')
+ZIP_EXTS = ('.zip', '.ZIP')
+
 @dataclass
 class VoiceEncoderConfig:
     model_sample_rate: int = 24_000

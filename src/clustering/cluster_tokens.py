@@ -14,12 +14,12 @@ from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 
 from ..logger import logger
-from ..configs import KMeansClusterConfig
+from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
-from ..utils import get_dataset_files, set_process_affinity
+from ..utils import set_process_affinity, find_files
 
-LAYERS = [19, -1]
-EMBEDDING_DIM = 1024
+LAYERS = [11]
+EMBEDDING_DIM = 768
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -65,10 +65,10 @@ def get_parser():
         default=16,
     )
     parser.add_argument(
-        "--epochs",
+        "--save_freq",
         type=int,
-        help="Number of epochs for k-means training",
-        default=10,
+        help="Number of steps after which the embeddings are saved",
+        default=50,
     )
     parser.add_argument(
         '--device',
@@ -80,7 +80,7 @@ def get_parser():
     return parser
 
 
-def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
+def get_kmeans_batch(dataset, encoder, max_size=1000):
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -105,37 +105,34 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
 
     start_time = time.time()
 
-    for e in tqdm(range(epochs)):
+    for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
+        logger.info(f'Processing batch: {idx}')
 
-        logger.info(f"Starting epoch: {e}")
+        input_ids = input_ids.to(DEVICE)
+        attention_masks = attention_masks.to(DEVICE)
 
-        for idx, (input_ids, attention_masks, _) in tqdm(enumerate(dataloader)):
-            logger.info(f'Processing batch: {idx}')
+        encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
 
-            input_ids = input_ids.to(DEVICE)
-            attention_masks = attention_masks.to(DEVICE)
+        for l in LAYERS:
+            single_layer = encoded_audio[l]
+            single_layer = layer_norm(single_layer)
+            logger.info(f"Layer {l}: {single_layer.shape}")
+            B, T, D = single_layer.shape
+            single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
+            features_batch[l].append(single_layer)
 
-            encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
+        accumulated_batch_size += B*T
+
+        if accumulated_batch_size >= max_size:
+            logger.info(f"Yielding batch of size {accumulated_batch_size}")
+            logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
+            yield features_batch, accumulated_batch_size
+
+            start_time = time.time()
+            accumulated_batch_size = 0
 
             for l in LAYERS:
-                single_layer = encoded_audio[l]
-                single_layer = layer_norm(single_layer)
-                logger.info(f"Layer {l}: {single_layer.shape}")
-                B, T, D = single_layer.shape
-                single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
-                features_batch[l].append(single_layer)
-
-            accumulated_batch_size += B*T
-
-            if accumulated_batch_size >= max_size:
-                logger.info(f"Yielding batch of size {accumulated_batch_size}")
-                logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
-                yield features_batch, accumulated_batch_size
-                start_time = time.time()
-                accumulated_batch_size = 0
-
-                for l in LAYERS:
-                    features_batch[l] = []
+                features_batch[l] = []
 
     if accumulated_batch_size > 0:
         logger.info(f"Yielding batch of size {accumulated_batch_size}")
@@ -151,7 +148,7 @@ def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
         max_no_improvement=config.max_no_improvement,
         n_init=config.n_init,
         reassignment_ratio=config.reassignment_ratio,
-        verbose=1,
+        verbose=0,
         compute_labels=True,
         init_size=None,
     )
@@ -179,7 +176,8 @@ def main(args):
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
-    files = get_dataset_files(args.indir, args.hf_dataset)
+    # files = get_dataset_files(args.indir, args.hf_dataset)
+    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
@@ -251,7 +249,8 @@ def main(args):
 
         encoder = HubertEncoder(
             device=args.device,
-            quantize=False
+            quantize=False,
+            batch_size=args.batch_size,
         )
 
     # Create the k-means model
@@ -270,7 +269,6 @@ def main(args):
         get_kmeans_batch(
             dataset=dataset,
             encoder=encoder,
-            epochs=args.epochs,
             max_size=KMeansClusterConfig.batch_size
         )
     ):
@@ -278,7 +276,7 @@ def main(args):
             kmeans_batch[k] = np.concatenate(v, axis=0)
             quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
 
-            if idx % 50 == 0:
+            if idx % args.save_freq == 0:
                 ckpt_name = f"kmeans__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
                 logger.info(f'Saving k-means model to {save_path}')

@@ -1,14 +1,16 @@
 import torch
 import math
+import zipfile
+import tarfile
+import numpy as np
+import torch.nn.functional as F
 from tqdm import tqdm
 from typing import List, Optional
-import numpy as np
 from copy import deepcopy
-import torch.nn.functional as F
 from torch.utils.data import IterableDataset, get_worker_info
 
-from .configs import AudioConfig
-from .utils import read_audio
+from .configs import AudioConfig, AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
+from .utils import read_audio, iterate_tar, iterate_zip
 from .logger import logger
 
 
@@ -31,7 +33,7 @@ class AudioBatchDataset(IterableDataset):
         ):
 
         # From: https://github.com/pytorch/pytorch/issues/13246#issuecomment-715050814
-        # If the list of audio files is Python list, the memory usage is very high when using multiple works
+        # If the list of audio files is Python list, the memory usage is very high when using multiple workers
         # It is better to convert the list to numpy array
         # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
         self.audio_files = np.array(audio_files).astype(np.string_)
@@ -54,6 +56,83 @@ class AudioBatchDataset(IterableDataset):
         self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
         self.files_processed = torch.zeros(1, dtype=torch.long).share_memory_()
 
+        # TODO: There needs to a better approach to handle tar files
+        self.pbar.total = 0
+
+        for f in audio_files:
+            if f.endswith(TAR_EXTS):
+                with tarfile.open(f, 'r') as tar:
+                    total_files = len(tar.getnames())
+                    logger.info(f"Found {total_files} files in {f}")
+
+                    self.pbar.total += total_files
+
+            elif f.endswith(AUDIO_EXTS):
+                self.pbar.total += 1
+
+            elif f.endswith(ZIP_EXTS):
+                with zipfile.ZipFile(f, 'r') as z:
+                    total_files = len(z.namelist())
+                    logger.info(f"Found {total_files} files in {f}")
+
+                    self.pbar.total += total_files
+
+    def _iter_chunk(self, waveform: torch.Tensor, file_name: str):
+        length = waveform.shape[-1]
+
+        if self.transform:
+            waveform = self.transform(waveform)
+
+        audio_config = AudioConfig(
+            file_name=file_name,
+            length_seconds=length/ self.sample_rate,
+            length_samples=length,
+            length_tokens=self.model_token_rate
+        )
+
+        # If post transform is provided it is assumed that the transform
+        # will take in the audio and produce (N, D) tensor where N = number of tokens
+        # and D = dimension of the token
+        if self.post_transform:
+            input_ids, attention_mask = self.post_transform(waveform)
+            input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
+            stride = self.model_token_rate * self.single_segment_duration
+
+            idx = 0
+            for i in range(0, input_ids.shape[0], stride):
+                segment = input_ids[i:i+stride, :]
+                mask = attention_mask[i:i+stride]
+
+                # Store audio configs start idx, end idx in seconds
+                audio_config.start_idx = idx
+                audio_config.end_idx = min(idx + self.segment_length, length)
+                idx += self.segment_length
+
+                if self.pad_token is None:
+                    yield segment, mask, deepcopy(audio_config)
+                    continue
+
+                padded_len = stride - segment.shape[0]
+                segment = F.pad(segment, (0, 0, 0, padded_len), "constant", value=self.pad_token)
+                mask = F.pad(mask, (0, padded_len), "constant", value=0)
+
+                yield segment, mask, deepcopy(audio_config)
+
+        else:
+            for i in range(0, length, self.stride):
+                segment = waveform[0, i:i+self.segment_length]
+                attention_mask = torch.ones(segment.shape[0])
+                audio_config.start_idx = i
+                audio_config.end_idx = min(i + self.segment_length, length)
+
+                if segment.shape[0] < self.segment_length:
+                    padded_segment_len = self.segment_length - segment.shape[0]
+
+                    attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=0)
+                    segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
+
+                yield segment, attention_mask, deepcopy(audio_config)
+
     def __iter__(self):
         worker_info = get_worker_info()
 
@@ -71,70 +150,39 @@ class AudioBatchDataset(IterableDataset):
             logger.info(f"Worker {worker_id} processing files {iter_start} to {iter_end}")
 
         for idx in range(iter_start, iter_end):
-            self.files_processed += 1
-            self.pbar.n = self.files_processed.item()
-            self.pbar.refresh()
 
             file_path = str(self.audio_files[idx], encoding='utf-8')
-            # file_path = self.audio_files[idx]
-            waveform = read_audio(file_path, self.sample_rate)
-            length = waveform.shape[-1]
 
-            if self.transform:
-                waveform = self.transform(waveform)
+            if file_path.endswith(AUDIO_EXTS):
+                waveform = read_audio(file_path, self.sample_rate)
+                yield from self._iter_chunk(waveform, file_path)
 
-            audio_config = AudioConfig(
-                file_name=file_path,
-                length_seconds=length/ self.sample_rate,
-                length_samples=length,
-                length_tokens=self.model_token_rate
-            )
+                self.files_processed += 1
+                self.pbar.n = self.files_processed.item()
+                self.pbar.refresh()
 
-            # If post transform is provided it is assumed that the transform
-            # will take in the audio and produce (N, D) tensor where N 
-            # is the number od tokens and D is the dimension of the token
-            if self.post_transform:
-                input_ids, attention_mask = self.post_transform(waveform)
-                input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
-                stride = self.model_token_rate * self.single_segment_duration
+            elif file_path.endswith(TAR_EXTS):
+                for file_content, file_name in iterate_tar(file_path):
+                    waveform = read_audio(file_content, self.sample_rate)
+                    yield from self._iter_chunk(waveform, file_name)
 
-                idx = 0
-                for i in range(0, input_ids.shape[0], stride):
-                    segment = input_ids[i:i+stride, :]
-                    mask = attention_mask[i:i+stride]
+                    self.files_processed += 1
+                    self.pbar.n = self.files_processed.item()
+                    self.pbar.refresh()
 
-                    # Store audio configs start idx, end idx in seconds
-                    audio_config.start_idx = idx
-                    audio_config.end_idx = min(idx + self.segment_length, length)
-                    idx += self.segment_length
+            elif file_path.endswith(ZIP_EXTS):
+                for file_content, file_name in iterate_zip(file_path):
+                    waveform = read_audio(file_content, self.sample_rate)
+                    yield from self._iter_chunk(waveform, file_name)
 
-                    if self.pad_token is None:
-                        yield segment, mask, deepcopy(audio_config)
-                        continue
+                    self.files_processed += 1
+                    self.pbar.n = self.files_processed.item()
+                    self.pbar.refresh()
 
-                    padded_len = stride - segment.shape[0]
-                    segment = F.pad(segment, (0, 0, 0, padded_len), "constant", value=self.pad_token)
-                    mask = F.pad(mask, (0, padded_len), "constant", value=0)
+            else:
+                logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-                    yield segment, mask, deepcopy(audio_config)
-
-                continue
-
-
-            for i in range(0, length, self.stride):
-                segment = waveform[0, i:i+self.segment_length]
-                attention_mask = torch.ones(segment.shape[0])
-                audio_config.start_idx = i
-                audio_config.end_idx = min(i + self.segment_length, length)
-
-                if segment.shape[0] < self.segment_length:
-                    padded_segment_len = self.segment_length - segment.shape[0]
-
-                    attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=0)
-                    segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
-
-                yield segment, attention_mask, deepcopy(audio_config)
-
+    def __del__(self):
         self.pbar.close()
 
 if __name__ == '__main__':
