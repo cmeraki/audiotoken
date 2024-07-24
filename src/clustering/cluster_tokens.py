@@ -3,6 +3,7 @@
 import os
 import time
 import joblib
+import random
 import argparse
 import numpy as np
 from tqdm import tqdm
@@ -176,8 +177,8 @@ def main(args):
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
-    # files = get_dataset_files(args.indir, args.hf_dataset)
     files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
+    files = random.shuffle(files)
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
