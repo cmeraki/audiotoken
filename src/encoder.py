@@ -5,12 +5,16 @@ import joblib
 from pathlib import Path
 from typing import List, Optional
 from encodec import EncodecModel
-from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor, WhisperForAudioClassification, WhisperFeatureExtractor
+from transformers import HubertModel, Wav2Vec2BertModel, WhisperForAudioClassification, WhisperFeatureExtractor
+from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertSelfAttention
 
 from .utils import read_audio
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig, WhisperEncoderConfig
 from .logger import logger
 from .processors import Wav2VecBertProcessor
+
+from .modeling_wav2vec2_bert import forward
+Wav2Vec2BertSelfAttention.forward = forward
 
 
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul

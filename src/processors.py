@@ -1,13 +1,9 @@
 import math
 import torch
-from typing import Optional, Dict
+from typing import Dict
 import torch.nn.functional as F
 
 from src.utils import hertz_to_mel, mel_to_hertz, create_triangular_filter_bank
-
-torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
 
 def mel_filter_bank(
     num_frequency_bins: int,
@@ -265,6 +261,10 @@ if __name__ == '__main__':
     """
     python -m src.processors --indir ./data/test-clean/ --device cuda:0
     """
+    torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+    torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+    torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
+
     import pdb
     import time
     import torch
