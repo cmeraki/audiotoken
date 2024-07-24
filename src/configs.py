@@ -24,7 +24,7 @@ class HubertEncoderConfig:
     model_sample_rate: int = 16_000
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 64
+    output_layer: int = 11
     model_token_rate: int = 50
     quantizer_path: Optional[str] = hf_hub_download(
         repo_id=model_id,

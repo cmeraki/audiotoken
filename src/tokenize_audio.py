@@ -36,7 +36,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         logger.info(f"Processed batch: {idx}")
 
         for jdx, (tokens_batch, file_pointer) in enumerate(zip(encoded_audio, file_pointers)):
-            logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
+            logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
             save_audio_tokens(tokens_batch, file_pointer, outdir)
 
 
@@ -104,7 +104,7 @@ if __name__ == '__main__':
         from .encoder import HubertEncoder, hubert_processor
         from .configs import HubertEncoderConfig
 
-        encoder = HubertEncoder(device=DEVICE) # type: ignore
+        encoder = HubertEncoder(device=DEVICE, batch_size=args.batch_size) # type: ignore
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 

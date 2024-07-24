@@ -1,11 +1,14 @@
+import io
 import os
 import torch
 import psutil
+import tarfile
 import numpy as np
 import torchaudio
 from tqdm import tqdm
 from encodec.utils import convert_audio
 from datasets import load_dataset
+from typing import IO, Generator
 
 from .configs import AudioConfig
 from .logger import logger
@@ -26,8 +29,62 @@ def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     return audio
 
 
+def process_audio_chunks(tar, member, chunk_length: int = 10, model_sample_rate: int = 16000) -> Generator:
+    f = tar.extractfile(member)
+    if f is None:
+        return
+
+    buffer = io.BytesIO(f.read())
+
+    metadata = torchaudio.info(buffer)
+    sample_rate = metadata.sample_rate
+    num_frames = metadata.num_frames
+    num_channels = metadata.num_channels
+    total_seconds = num_frames/sample_rate
+
+    logger.debug(f'Reading {member.name} with metadata: {metadata} and length: {total_seconds}')
+
+    # Calculate chunk size in frames
+    chunk_size = chunk_length * sample_rate
+
+    for start_frame in range(0, num_frames, chunk_size):
+        end_frame = min(start_frame + chunk_size, num_frames)
+        buffer.seek(0)
+
+        audio, sr = torchaudio.load(buffer, frame_offset=start_frame, num_frames=end_frame-start_frame)
+        audio = convert_audio(audio, sr, model_sample_rate, 1)
+
+        yield audio, member.name, start_frame, end_frame
+
+
+def iterate_tar(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
+    """
+    Given a tar file, this function reads a single audio file
+    at once and returns the raw bytes of the audio file
+
+    Args:
+        x (os.PathLike
+
+    Yields:
+        Generator[IO[bytes]]
+    """
+    with tarfile.open(x, 'r') as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+
+            file_content = tar.extractfile(member)
+            file_name = member.name
+
+            if file_content is None:
+                logger.error(f"Error extracting file {file_name} from {x}")
+                continue
+
+            yield file_content, file_name
+
+
 def find_audio_files(folder):
-    audio_extensions = ('.mp3', '.flac', '.wav', '.ogg')
+    audio_extensions = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
     audio_files = []
 
     # Walk through the directory and its subdirectories
@@ -49,7 +106,7 @@ def find_files(folder, extensions):
             if file.lower().endswith(extensions):
                 tokens_files.append(os.path.join(root, file))
 
-    logger.info(f'Found {len(tokens_files)} tokens files in {folder}')
+    logger.info(f'Found {len(tokens_files)} files in {folder}')
     return tokens_files
 
 
@@ -94,7 +151,8 @@ def get_dataset_files(indir: str, hf_dataset: str):
     assert indir or hf_dataset, "Either hf_dataset or indir must be provided"
 
     if indir and os.path.isdir(indir):
-        return find_audio_files(indir)
+        # return find_audio_files(indir)
+        return find_files(indir, ('.tar', '.tar.gz', '.tgz'))
 
     elif indir and not os.path.isdir(indir):
         return [indir]

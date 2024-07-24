@@ -117,21 +117,14 @@ class HubertEncoder:
         config: HubertEncoderConfig=HubertEncoderConfig(),
         quantize: bool = True,
         device: str = 'cpu',
-        compile: bool = True
+        compile: bool = True,
+        batch_size: int = 1
     ):
 
-        model_id = config.model_id
-        self.batch_size = config.batch_size
-        self.segment_length = config.model_sample_rate * config.single_segment_duration
-        self.device = torch.device(device)
-        self.config = config
         self.quantize = quantize
+        self.output_layer = config.output_layer
 
-        self.pad_token = 0
-        self.output_layer = 11
-
-        self.model = HubertModel.from_pretrained(model_id).to(self.device)
-
+        self.model = HubertModel.from_pretrained(config.model_id).to(device)
         self.model.eval()
 
         if self.quantize:
@@ -139,8 +132,8 @@ class HubertEncoder:
             self.C_np = self.km.cluster_centers_.transpose()
             self.Cnorm_np = (self.C_np ** 2).sum(0)
 
-            self.C = torch.from_numpy(self.C_np).t().to(self.device)
-            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+            self.C = torch.from_numpy(self.C_np).t().to(device)
+            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(device)
 
             del(self.C_np)
             del(self.Cnorm_np)
@@ -149,10 +142,15 @@ class HubertEncoder:
             self.model = torch.compile(self.model)
 
             # warmup the model
-            input = torch.randn((self.batch_size, 16000), device=self.device)#, dtype=torch.float16)
-            am = torch.ones((self.batch_size, 16000), device=self.device)#, dtype=torch.float16
-            for _ in range(5):
-                _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
+            input = torch.randn((batch_size, 160000), device=device)
+            am = torch.ones((batch_size, 160000), device=device)
+
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with torch.inference_mode():
+                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
+
+            del(input)
+            del(am)
 
     def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -225,11 +223,12 @@ class Wav2VecBertEncoder(torch.nn.Module):
             self.model = torch.compile(self.model)
 
             # Warmup the model, model expects dimension length to be 160
-            input = torch.randn((1, 64, 160), device=self.device)
-            am = torch.ones((1, 64), device=self.device)
+            input = torch.randn((192, 500, 80), device=self.device)
+            am = torch.ones((192, 500, 80), device=self.device)
 
-            for _ in range(5):
-                _ = self.model(input, attention_mask=am, output_hidden_states=True)
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with torch.inference_mode():
+                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
             del(input)
             del(am)
