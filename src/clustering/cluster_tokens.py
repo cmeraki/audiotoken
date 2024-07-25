@@ -13,6 +13,7 @@ from functools import partial
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
+from vector_quantize_pytorch import VectorQuantize
 
 from ..logger import logger
 from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
@@ -81,7 +82,7 @@ def get_parser():
     return parser
 
 
-def get_kmeans_batch(dataset, encoder, max_size=1000):
+def get_features_batch(dataset, encoder, max_size=1000):
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -141,6 +142,20 @@ def get_kmeans_batch(dataset, encoder, max_size=1000):
         yield features_batch, accumulated_batch_size
 
 
+def get_vq_model(n_clusters: int, batch_size: int = 16):
+    vq = VectorQuantize(
+        dim=EMBEDDING_DIM,
+        codebook_size=n_clusters,
+        decay=0.8,
+        commitment_weight=1
+    )
+    vq.to(DEVICE)
+    vq = torch.compile(vq)
+
+    vq(torch.randn(batch_size, EMBEDDING_DIM))
+    return vq
+
+
 def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
     return MiniBatchKMeans(
         n_clusters=n_clusters,
@@ -164,7 +179,7 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
     logger.info(f"K-means partial training took {time.time() - start_time:.2f}s")
 
     inertia = -kmodel.score(features_batch) / len(features_batch)
-    print(f"Total inertia: {round(inertia, 2)}\n")
+    logger.info(f"Total inertia: {round(inertia, 2)}\n")
 
     return kmodel
 
@@ -254,36 +269,41 @@ def main(args):
             batch_size=args.batch_size,
         )
 
-    # Create the k-means model
+    # Create the quantizer model
     total_batches = 0
     quantizers = {}
 
     for l in LAYERS:
-        logger.info(f'Creating k-means model for layer: {l}')
-        quantizers[l] = get_kmeans_model(
-            n_clusters=args.num_clusters,
-            config=KMeansClusterConfig,
-        )
+        logger.info(f'Creating quantizer model for layer: {l}')
+        quantizers[l] = get_vq_model(n_clusters=args.num_clusters)
+
+    pbar = tqdm(position=0, leave=True)
 
     # Iterate and train the k-means model batch by batch
-    for idx, (kmeans_batch, batch_size) in tqdm(enumerate(
-        get_kmeans_batch(
+    for idx, (kmeans_batch, batch_size) in tqdm(
+        enumerate(get_features_batch(
             dataset=dataset,
             encoder=encoder,
             max_size=KMeansClusterConfig.batch_size
-        )
-    )):
+        ))
+    ):
         for k, v in kmeans_batch.items():
-            kmeans_batch[k] = np.concatenate(v, axis=0)
-            quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
+            # kmeans_batch[k] = np.concatenate(v, axis=0)
+            # quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
+
+            _, indices, commit_loss = quantizers(k)
+
+            pbar.set_description(
+                f"Commitment loss: {commit_loss.item():.3f} | "
+                + f"active %: {indices.unique().numel() / args.num_clusters * 100:.3f}"
+            )
 
             if idx % args.save_freq == 0:
-                ckpt_name = f"kmeans__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
+                ckpt_name = f"quanitzer__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
-                logger.info(f'Saving k-means model to {save_path}')
+                logger.info(f'Saving quanitzer to {save_path}')
 
-                with open(save_path, "wb+") as f:
-                    joblib.dump(quantizers[k], f)
+                torch.save(quantizers[k].state_dict(), save_path)
 
         total_batches += batch_size
 
