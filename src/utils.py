@@ -85,8 +85,10 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 file_name=file_name,
                 file_stream=file_content,
                 target_sample_rate=model_sample_rate,
-                chunk_size=300
+                chunk_size=30
             )
+
+            logger.info(f'Processed one file in zip: {x}')
 
 
 def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
@@ -116,8 +118,10 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 file_name=file_name,
                 file_stream=file_content,
                 target_sample_rate=model_sample_rate,
-                chunk_size=300
+                chunk_size=30
             )
+
+            logger.info(f'Processed one file in tar: {x}')
 
 
 def find_audio_files(folder):

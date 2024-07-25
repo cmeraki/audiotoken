@@ -164,8 +164,7 @@ class AudioBatchDataset(IterableDataset):
                 # self.pbar.refresh()
 
             elif file_path.endswith(TAR_EXTS):
-                for file_content, file_name in iterate_tar(file_path, self.sample_rate):
-                    waveform = read_audio(file_content, self.sample_rate)
+                for waveform, file_name in iterate_tar(file_path, self.sample_rate):
                     yield from self._iter_chunk(waveform, file_name)
 
                     # self.files_processed += 1

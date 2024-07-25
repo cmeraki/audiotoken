@@ -87,8 +87,8 @@ def get_kmeans_batch(dataset, encoder, max_size=1000):
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
-        prefetch_factor=2,
+        num_workers=12,
+        prefetch_factor=4,
         pin_memory=True
     )
 
@@ -266,13 +266,13 @@ def main(args):
         )
 
     # Iterate and train the k-means model batch by batch
-    for idx, (kmeans_batch, batch_size) in enumerate(
+    for idx, (kmeans_batch, batch_size) in tqdm(enumerate(
         get_kmeans_batch(
             dataset=dataset,
             encoder=encoder,
             max_size=KMeansClusterConfig.batch_size
         )
-    ):
+    )):
         for k, v in kmeans_batch.items():
             kmeans_batch[k] = np.concatenate(v, axis=0)
             quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
@@ -292,7 +292,7 @@ if __name__ == "__main__":
     python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --device cuda
     """
 
-    set_process_affinity(os.getpid(), [p for p in range(16)])
+    set_process_affinity(os.getpid(), [p for p in range(10)])
 
     parser = get_parser()
     args = parser.parse_args()

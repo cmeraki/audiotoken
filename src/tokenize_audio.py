@@ -19,8 +19,8 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
-        prefetch_factor=2,
+        num_workers=12,
+        prefetch_factor=4,
         pin_memory=True
     )
 
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     import argparse
     import random
 
-    set_process_affinity(os.getpid(), list(range(0, 12)))
+    set_process_affinity(os.getpid(), list(range(0, 20)))
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
