@@ -103,7 +103,7 @@ def get_features_batch(dataset, encoder, max_size=1000):
     accumulated_batch_size = 0
     features_batch = {}
     for l in LAYERS:
-     features_batch[l] = []
+        features_batch[l] = []
 
     start_time = time.time()
 
@@ -120,7 +120,7 @@ def get_features_batch(dataset, encoder, max_size=1000):
             single_layer = layer_norm(single_layer)
             logger.info(f"Layer {l}: {single_layer.shape}")
             B, T, D = single_layer.shape
-            single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
+            single_layer = single_layer.reshape(B*T, D)  # B*T, D
             features_batch[l].append(single_layer)
 
         accumulated_batch_size += B*T
@@ -149,10 +149,11 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
         decay=0.8,
         commitment_weight=1
     )
-    vq.to(DEVICE)
-    vq = torch.compile(vq)
+    vq.to(DEVICE) # type:ignore
 
-    vq(torch.randn(batch_size, EMBEDDING_DIM))
+    # vq = torch.compile(vq)
+    # vq(torch.randn((batch_size, EMBEDDING_DIM), device=DEVICE))
+
     return vq
 
 
@@ -287,11 +288,11 @@ def main(args):
             max_size=KMeansClusterConfig.batch_size
         ))
     ):
-        for k, v in kmeans_batch.items():
+        for layer_num, features in kmeans_batch.items():
             # kmeans_batch[k] = np.concatenate(v, axis=0)
             # quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
 
-            _, indices, commit_loss = quantizers(k)
+            _, indices, commit_loss = quantizers[layer_num](torch.stack(features))
 
             pbar.set_description(
                 f"Commitment loss: {commit_loss.item():.3f} | "
@@ -299,11 +300,11 @@ def main(args):
             )
 
             if idx % args.save_freq == 0:
-                ckpt_name = f"quanitzer__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
+                ckpt_name = f"quanitzer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
                 logger.info(f'Saving quanitzer to {save_path}')
 
-                torch.save(quantizers[k].state_dict(), save_path)
+                torch.save(quantizers[layer_num].state_dict(), save_path)
 
         total_batches += batch_size
 
