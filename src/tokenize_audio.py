@@ -26,7 +26,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
 
     start_time = time.time()
 
-    for idx, (input_ids, attention_masks, file_pointers) in enumerate(dataloader):
+    for idx, (input_ids, attention_masks, file_pointers) in tqdm(enumerate(dataloader)):
         logger.info(f'Processing batch: {idx}')
 
         input_ids = input_ids.to(DEVICE)
@@ -79,7 +79,7 @@ if __name__ == '__main__':
 
     ALL_EXTS = AUDIO_EXTS + TAR_EXTS + ZIP_EXTS
     files = find_files(args.indir, ALL_EXTS)
-    files = random.shuffle(files)
+    random.shuffle(files)
 
     logger.info(f'Found {len(files)} audio files in the dataset.')
 

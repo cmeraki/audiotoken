@@ -53,6 +53,7 @@ class AudioBatchDataset(IterableDataset):
         # TODO: Implement overlap
         assert self.stride == self.segment_length, "Overlap not supported yet"
 
+        """
         self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
         self.files_processed = torch.zeros(1, dtype=torch.long).share_memory_()
 
@@ -76,6 +77,7 @@ class AudioBatchDataset(IterableDataset):
                     logger.info(f"Found {total_files} files in {f}")
 
                     self.pbar.total += total_files
+        """
 
     def _iter_chunk(self, waveform: torch.Tensor, file_name: str):
         length = waveform.shape[-1]
@@ -157,33 +159,33 @@ class AudioBatchDataset(IterableDataset):
                 waveform = read_audio(file_path, self.sample_rate)
                 yield from self._iter_chunk(waveform, file_path)
 
-                self.files_processed += 1
-                self.pbar.n = self.files_processed.item()
-                self.pbar.refresh()
+                # self.files_processed += 1
+                # self.pbar.n = self.files_processed.item()
+                # self.pbar.refresh()
 
             elif file_path.endswith(TAR_EXTS):
-                for file_content, file_name in iterate_tar(file_path):
+                for file_content, file_name in iterate_tar(file_path, self.sample_rate):
                     waveform = read_audio(file_content, self.sample_rate)
                     yield from self._iter_chunk(waveform, file_name)
 
-                    self.files_processed += 1
-                    self.pbar.n = self.files_processed.item()
-                    self.pbar.refresh()
+                    # self.files_processed += 1
+                    # self.pbar.n = self.files_processed.item()
+                    # self.pbar.refresh()
 
             elif file_path.endswith(ZIP_EXTS):
-                for file_content, file_name in iterate_zip(file_path):
-                    waveform = read_audio(file_content, self.sample_rate)
+                for waveform, file_name in iterate_zip(file_path, self.sample_rate):
                     yield from self._iter_chunk(waveform, file_name)
 
-                    self.files_processed += 1
-                    self.pbar.n = self.files_processed.item()
-                    self.pbar.refresh()
+                    # self.files_processed += 1
+                    # self.pbar.n = self.files_processed.item()
+                    # self.pbar.refresh()
 
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
     def __del__(self):
-        self.pbar.close()
+        pass
+        # self.pbar.close()
 
 if __name__ == '__main__':
     import pdb
@@ -192,7 +194,7 @@ if __name__ == '__main__':
     from functools import partial
     from torch.cuda import empty_cache
 
-    from .utils import get_dataset_files
+    from .utils import find_files
 
     parser = ArgumentParser()
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
@@ -200,7 +202,9 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, default=4, help='Batch size for encoding.')
 
     args = parser.parse_args()
-    files = get_dataset_files(None, 'speechcolab/gigaspeech') # type: ignore
+    files = find_files('/home/romit/Downloads/audio/', TAR_EXTS)
+
+    print('Found files:', len(files))
 
     if args.tokenizer == 'encodec':
         from .configs import VoiceEncoderConfig

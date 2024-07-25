@@ -6,7 +6,9 @@ import zipfile
 import tarfile
 import numpy as np
 import torchaudio
+
 from tqdm import tqdm
+from torchaudio.io import StreamReader
 from encodec.utils import convert_audio
 from datasets import load_dataset
 from typing import IO, Generator
@@ -30,35 +32,33 @@ def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     return audio
 
 
-def process_audio_chunks(tar, member, chunk_length: int = 10, model_sample_rate: int = 16000) -> Generator:
-    f = tar.extractfile(member)
-    if f is None:
-        return
+def process_audio_chunks(
+    file_name,
+    file_stream,
+    chunk_size,
+    target_sample_rate
+):
+    streamer = StreamReader(file_stream)
+    # metadata = streamer.get_src_stream_info(0)
 
-    buffer = io.BytesIO(f.read())
+    streamer.add_basic_audio_stream(
+        frames_per_chunk=int(chunk_size*target_sample_rate),
+        sample_rate=target_sample_rate,
+        decoder_option={"threads": "0"}
+    )
 
-    metadata = torchaudio.info(buffer)
-    sample_rate = metadata.sample_rate
-    num_frames = metadata.num_frames
-    num_channels = metadata.num_channels
-    total_seconds = num_frames/sample_rate
+    for idx, (chunk,) in enumerate(streamer.stream()):
+        assert chunk.shape[-1] == 1, f"Audio needs to be mono, provided {chunk.shape[-1]} channels for {file_name}"
 
-    logger.debug(f'Reading {member.name} with metadata: {metadata} and length: {total_seconds}')
+        start_idx = idx * chunk_size
+        end_idx = start_idx + chunk_size
+        base, ext = os.path.splitext(file_name)
+        updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
 
-    # Calculate chunk size in frames
-    chunk_size = chunk_length * sample_rate
-
-    for start_frame in range(0, num_frames, chunk_size):
-        end_frame = min(start_frame + chunk_size, num_frames)
-        buffer.seek(0)
-
-        audio, sr = torchaudio.load(buffer, frame_offset=start_frame, num_frames=end_frame-start_frame)
-        audio = convert_audio(audio, sr, model_sample_rate, 1)
-
-        yield audio, member.name, start_frame, end_frame
+        yield chunk.reshape(1, -1), updated_file_name,
 
 
-def iterate_zip(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
+def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
     """
     Given a zip file, this function reads a single audio file
     at once and returns the raw bytes of the audio file
@@ -81,10 +81,15 @@ def iterate_zip(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
                 logger.error(f"Error extracting file {file_info.filename} from {x}")
                 continue
 
-            yield file_content, file_name
+            yield from process_audio_chunks(
+                file_name=file_name,
+                file_stream=file_content,
+                target_sample_rate=model_sample_rate,
+                chunk_size=300
+            )
 
 
-def iterate_tar(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
+def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
     """
     Given a tar file, this function reads a single audio file
     at once and returns the raw bytes of the audio file
@@ -107,7 +112,12 @@ def iterate_tar(x: os.PathLike) -> Generator[tuple[IO[bytes], str], None, None]:
                 logger.error(f"Error extracting file {file_name} from {x}")
                 continue
 
-            yield file_content, file_name
+            yield from process_audio_chunks(
+                file_name=file_name,
+                file_stream=file_content,
+                target_sample_rate=model_sample_rate,
+                chunk_size=300
+            )
 
 
 def find_audio_files(folder):

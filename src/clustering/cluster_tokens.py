@@ -178,7 +178,7 @@ def main(args):
 
     # Get list of files based on either local directory or HF dataset
     files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
-    files = random.shuffle(files)
+    random.shuffle(files)
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
