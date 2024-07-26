@@ -55,7 +55,7 @@ def process_audio_chunks(
         base, ext = os.path.splitext(file_name)
         updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
 
-        yield chunk.reshape(1, -1), updated_file_name,
+        yield chunk.reshape(1, -1), updated_file_name
 
 
 def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
