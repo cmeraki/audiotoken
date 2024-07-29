@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import List, Optional
 from encodec import EncodecModel
 from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor, WhisperForAudioClassification, WhisperFeatureExtractor
+from vector_quantize_pytorch import VectorQuantize
 
-from .utils import read_audio
+from .utils import read_audio, load_vq_weights
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig, WhisperEncoderConfig
 from .logger import logger
 
@@ -128,15 +129,25 @@ class HubertEncoder:
         self.model.eval()
 
         if self.quantize:
-            self.km = joblib.load(config.quantizer_path)
-            self.C_np = self.km.cluster_centers_.transpose()
-            self.Cnorm_np = (self.C_np ** 2).sum(0)
+            vq = VectorQuantize(
+                dim=768,
+                codebook_size=2048,
+                decay=0.8,
+                commitment_weight=1
+            )
+            vq.to(device) # type: ignore
+            vq.eval()
 
-            self.C = torch.from_numpy(self.C_np).t().to(device)
-            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(device)
+            model_weights = torch.load(config.quantizer_path, map_location=device)
 
-            del(self.C_np)
-            del(self.Cnorm_np)
+            vq = load_vq_weights(
+                model_weights=model_weights,
+                model=vq,
+            )
+
+            self.C = vq._codebook.embed
+
+            del (vq)
 
         if compile:
             self.model = torch.compile(self.model)

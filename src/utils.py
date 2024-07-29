@@ -235,3 +235,14 @@ def set_process_affinity(process_id, cores):
     """
     p = psutil.Process(process_id)
     p.cpu_affinity(cores)
+
+
+def load_vq_weights(model_weights, model):
+    new_state_dict = {}
+
+    for k, v in model_weights.items():
+        new_state_dict[k] = v
+
+    model.load_state_dict(new_state_dict)
+
+    return model

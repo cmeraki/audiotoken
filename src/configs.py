@@ -24,6 +24,7 @@ class VoiceDecoderConfig(VoiceEncoderConfig):
 
 @dataclass
 class HubertEncoderConfig:
+    # TODO: Update the model paths to huggingface paths
     # model_id: str = 'voidful/mhubert-base'
     model_id: str = 'data/model/trimmed/hubert_11/'
     model_sample_rate: int = 16_000
@@ -31,10 +32,7 @@ class HubertEncoderConfig:
     overlap: float = 0
     output_layer: int = 11
     model_token_rate: int = 50
-    quantizer_path: Optional[str] = hf_hub_download(
-        repo_id='voidful/mhubert-base',
-        filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
-    )
+    quantizer_path: str = 'data/vq_hubert_60k_run4/quanitzer__L11_C2048_ckpt30000.pkl'
     pad_token: Optional[int] = 0
 
 @dataclass
