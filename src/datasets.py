@@ -182,9 +182,9 @@ class AudioBatchDataset(IterableDataset):
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-            with open('logs/processed.txt', 'a') as fp:
-                fp.write(file_path)
-                fp.write('\n')
+            # with open('logs/processed.txt', 'a') as fp:
+            #     fp.write(file_path)
+            #     fp.write('\n')
 
             logger.info(f"Processed complete file at {file_path}")
 
@@ -201,6 +201,8 @@ if __name__ == '__main__':
 
     from .utils import find_files
 
+    DEVICE = 'cuda:0'
+
     parser = ArgumentParser()
     parser.add_argument('--indir', type=str, required=True, help='Folder to load')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
@@ -209,6 +211,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
+    files = sorted(files)
 
     print('Found files:', len(files))
 
@@ -268,8 +271,8 @@ if __name__ == '__main__':
     )
 
     for idx, (segments, attention_masks, file_names) in tqdm(enumerate(dataloader)):
-        segments = segments.to('cuda')
-        attention_masks = attention_masks.to('cuda')
+        segments = segments.to(DEVICE)
+        attention_masks = attention_masks.to(DEVICE)
 
-        if idx % 10:
+        if idx % 100:
             empty_cache()

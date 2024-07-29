@@ -128,6 +128,13 @@ class HubertEncoder:
         self.model = HubertModel.from_pretrained(config.model_id).to(device)
         self.model.eval()
 
+        self.layer_norm = torch.nn.LayerNorm(
+            normalized_shape=768,
+            elementwise_affine=False,
+            bias=False,
+            device=device,
+        )
+
         if self.quantize:
             vq = VectorQuantize(
                 dim=768,
@@ -172,6 +179,7 @@ class HubertEncoder:
 
                 if self.quantize:
                     embeddings = embeddings[self.output_layer]  # B, T, D
+                    embeddings = self.layer_norm(embeddings)
                     logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)

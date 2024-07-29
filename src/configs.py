@@ -32,7 +32,7 @@ class HubertEncoderConfig:
     overlap: float = 0
     output_layer: int = 11
     model_token_rate: int = 50
-    quantizer_path: str = 'data/vq_hubert_60k_run4/quanitzer__L11_C2048_ckpt30000.pkl'
+    quantizer_path: str = 'data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pkl'
     pad_token: Optional[int] = 0
 
 @dataclass

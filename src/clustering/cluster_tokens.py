@@ -152,7 +152,7 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     vq.to(DEVICE) # type:ignore
 
     new_state_dict = {}
-    old_vq = torch.load('data/vq_hubert_60k_run4/quanitzer__L11_C2048_ckpt30000.pkl', map_location=DEVICE)
+    old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
 
     for k, v in old_vq.items():
         new_state_dict[k] = v
@@ -202,6 +202,7 @@ def main(args):
 
     # Get list of files based on either local directory or HF dataset
     files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
+    files = sorted(files)
     # random.shuffle(files)
     print(f'Found {len(files)} files')
 
