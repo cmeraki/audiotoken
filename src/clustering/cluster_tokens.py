@@ -151,13 +151,13 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     )
     vq.to(DEVICE) # type:ignore
 
-    new_state_dict = {}
-    old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
+    # new_state_dict = {}
+    # old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
 
-    for k, v in old_vq.items():
-        new_state_dict[k] = v
+    # for k, v in old_vq.items():
+    #     new_state_dict[k] = v
 
-    vq.load_state_dict(new_state_dict) # type:ignore
+    # vq.load_state_dict(new_state_dict) # type:ignore
 
     # vq = torch.compile(vq)
     # vq(torch.randn((batch_size, EMBEDDING_DIM), device=DEVICE))

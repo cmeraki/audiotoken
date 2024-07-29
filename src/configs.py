@@ -33,6 +33,10 @@ class HubertEncoderConfig:
     output_layer: int = 11
     model_token_rate: int = 50
     quantizer_path: str = 'data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pkl'
+    # quantizer_path: Optional[str] = hf_hub_download(
+    #     repo_id=model_id,
+    #     filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
+    # )
     pad_token: Optional[int] = 0
 
 @dataclass
