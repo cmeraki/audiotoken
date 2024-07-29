@@ -20,8 +20,8 @@ from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import set_process_affinity, find_files
 
-LAYERS = [11]
-EMBEDDING_DIM = 768
+LAYERS = [19]
+EMBEDDING_DIM = 1024
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -70,7 +70,7 @@ def get_parser():
         "--save_freq",
         type=int,
         help="Number of steps after which the embeddings are saved",
-        default=50,
+        default=100,
     )
     parser.add_argument(
         '--device',
@@ -201,19 +201,19 @@ def main(args):
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
-    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
-    files = sorted(files)
+    files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
+    files = sorted(files, reverse=True)
     # random.shuffle(files)
     print(f'Found {len(files)} files')
 
-    with open('./logs/processed.txt', 'r') as fp:
-        d = fp.read()
-        processed_files = []
-        for ln in d.split('\n'):
-            processed_files.append(ln)
+    # with open('./logs/processed.txt', 'r') as fp:
+    #     d = fp.read()
+    #     processed_files = []
+    #     for ln in d.split('\n'):
+    #         processed_files.append(ln)
 
-    files = [f for f in files if f not in processed_files]
-    print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
+    # files = [f for f in files if f not in processed_files]
+    # print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
@@ -222,15 +222,13 @@ def main(args):
         # Create the dataset and the encoder
         from transformers import AutoFeatureExtractor
         from ..configs import Wav2VecBertConfig
-        from ..encoder import w2vbert2_processor, Wav2VecBertEncoder
+        from ..encoder import Wav2VecBertEncoder
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            post_transform=post_transform_func,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
@@ -239,31 +237,8 @@ def main(args):
         # Create the encoder model
         encoder = Wav2VecBertEncoder(
             config=Wav2VecBertConfig(),
-            device=args.device
-        )
-
-    elif args.embedder == 'whisper':
-        # Create the dataset and the encoder
-        from transformers import WhisperFeatureExtractor
-        from ..configs import WhisperEncoderConfig
-        from ..encoder import WhisperEncoder, whisper_processor
-
-        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
-        post_transform_func = partial(whisper_processor, processor=processor)
-
-        dataset = AudioBatchDataset(
-            files,
-            sample_rate=WhisperEncoderConfig.model_sample_rate,
-            post_transform=post_transform_func,
-            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
-            model_token_rate=WhisperEncoderConfig.model_token_rate,
-            pad_token=WhisperEncoderConfig.pad_token,
-        )
-
-        encoder = WhisperEncoder(
-            config=WhisperEncoderConfig(),
-            quantize=False,
             device=args.device,
+            batch_size=args.batch_size,
         )
 
     elif args.embedder == 'hubert':

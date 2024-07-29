@@ -14,25 +14,14 @@ from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2V
 from .logger import logger
 from .processors import Wav2VecBertProcessor
 
-from .modeling_wav2vec2_bert import forward
-Wav2Vec2BertSelfAttention.forward = forward
+from .modeling_wav2vec2_bert import forward as sdpa_forward
+Wav2Vec2BertSelfAttention.forward = sdpa_forward
 
 
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
 # torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
-def w2vbert2_processor(audio, processor):
-
-    proc = processor(
-        audio,
-        sampling_rate=Wav2VecBertConfig.model_sample_rate,
-        return_attention_masks=True,
-        return_tensors='pt'
-    )
-
-    return proc.input_features, proc.attention_mask
 
 
 def hubert_processor(audio, processor):
@@ -205,6 +194,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
         quantize: bool = False,
         device: str = 'cpu',
         compile: bool = True,
+        batch_size: int = 128,
         multi_gpu: bool = False
     ):
 
@@ -243,8 +233,6 @@ class Wav2VecBertEncoder(torch.nn.Module):
             device=device,
         )
 
-        logger.info(f'Ouput layer: {self.output_layer}')
-
         if self.quantize:
             kmeans_path = Path(config.quantizer_path) # type: ignore
             km = joblib.load(kmeans_path)
@@ -257,11 +245,11 @@ class Wav2VecBertEncoder(torch.nn.Module):
             self.model = torch.compile(self.model)
 
             # Warmup the model, model expects dimension length to be 160
-            input = torch.randn((192, 500, 80), device=self.device)
-            am = torch.ones((192, 500, 80), device=self.device)
+            input = torch.randn((batch_size, 500, 160), device=device)
+            am = torch.ones((batch_size, 500), device=device)
 
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                with torch.inference_mode():
+                with torch.no_grad():
                     _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
             del(input)
@@ -276,7 +264,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
                 logger.info(f"Batch size: {input_batch.shape}, Mask size: {mask.shape}")
                 logger.info(f"Processed size: {input_features.shape}, Mask size: {attention_mask.shape}")
 
-                embeddings = self.model.forward(input_features, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
+                embeddings = self.model(input_features, attention_mask=attention_mask, output_hidden_states=True).hidden_states # (N, B, T, D)
 
                 if self.quantize:
                     embeddings = embeddings[self.output_layer]  # B, T, D
