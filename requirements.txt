@@ -18,3 +18,4 @@ ninja==1.11.1.1
 # flash-attn==2.5.1.post1
 # vllm==0.4.3
 psutil==5.9.8
+vector-quantize-pytorch==1.15.3

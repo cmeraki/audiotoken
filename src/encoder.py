@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import List, Optional
 from encodec import EncodecModel
 from transformers import HubertModel, Wav2Vec2BertModel, AutoFeatureExtractor, WhisperForAudioClassification, WhisperFeatureExtractor
+from vector_quantize_pytorch import VectorQuantize
 
-from .utils import read_audio
+from .utils import read_audio, load_vq_weights
 from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig, WhisperEncoderConfig
 from .logger import logger
 
@@ -117,42 +118,57 @@ class HubertEncoder:
         config: HubertEncoderConfig=HubertEncoderConfig(),
         quantize: bool = True,
         device: str = 'cpu',
-        compile: bool = True
+        compile: bool = True,
+        batch_size: int = 1
     ):
 
-        model_id = config.model_id
-        self.batch_size = config.batch_size
-        self.segment_length = config.model_sample_rate * config.single_segment_duration
-        self.device = torch.device(device)
-        self.config = config
         self.quantize = quantize
+        self.output_layer = config.output_layer
 
-        self.pad_token = 0
-        self.output_layer = 11
-
-        self.model = HubertModel.from_pretrained(model_id).to(self.device)
-
+        self.model = HubertModel.from_pretrained(config.model_id).to(device)
         self.model.eval()
 
+        self.layer_norm = torch.nn.LayerNorm(
+            normalized_shape=768,
+            elementwise_affine=False,
+            bias=False,
+            device=device,
+        )
+
         if self.quantize:
-            self.km = joblib.load(config.quantizer_path)
-            self.C_np = self.km.cluster_centers_.transpose()
-            self.Cnorm_np = (self.C_np ** 2).sum(0)
+            vq = VectorQuantize(
+                dim=768,
+                codebook_size=2048,
+                decay=0.8,
+                commitment_weight=1
+            )
+            vq.to(device) # type: ignore
+            vq.eval()
 
-            self.C = torch.from_numpy(self.C_np).t().to(self.device)
-            self.Cnorm = torch.from_numpy(self.Cnorm_np).to(self.device)
+            model_weights = torch.load(config.quantizer_path, map_location=device)
 
-            del(self.C_np)
-            del(self.Cnorm_np)
+            vq = load_vq_weights(
+                model_weights=model_weights,
+                model=vq,
+            )
+
+            self.C = vq._codebook.embed
+
+            del (vq)
 
         if compile:
             self.model = torch.compile(self.model)
 
             # warmup the model
-            input = torch.randn((self.batch_size, 16000), device=self.device)#, dtype=torch.float16)
-            am = torch.ones((self.batch_size, 16000), device=self.device)#, dtype=torch.float16
-            for _ in range(5):
-                _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
+            input = torch.randn((batch_size, 160000), device=device)
+            am = torch.ones((batch_size, 160000), device=device)
+
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with torch.inference_mode():
+                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
+
+            del(input)
+            del(am)
 
     def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -163,6 +179,7 @@ class HubertEncoder:
 
                 if self.quantize:
                     embeddings = embeddings[self.output_layer]  # B, T, D
+                    embeddings = self.layer_norm(embeddings)
                     logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
@@ -225,11 +242,12 @@ class Wav2VecBertEncoder(torch.nn.Module):
             self.model = torch.compile(self.model)
 
             # Warmup the model, model expects dimension length to be 160
-            input = torch.randn((1, 64, 160), device=self.device)
-            am = torch.ones((1, 64), device=self.device)
+            input = torch.randn((192, 500, 80), device=self.device)
+            am = torch.ones((192, 500, 80), device=self.device)
 
-            for _ in range(5):
-                _ = self.model(input, attention_mask=am, output_hidden_states=True)
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                with torch.inference_mode():
+                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
 
             del(input)
             del(am)

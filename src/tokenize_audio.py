@@ -7,10 +7,10 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from loguru import logger
 
-from .utils import find_audio_files, save_audio_tokens, get_dataset_files, set_process_affinity
+from .utils import save_audio_tokens, find_files, set_process_affinity
 from .datasets import AudioBatchDataset, collate_fn
 from .logger import logger
-
+from .configs import AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -19,14 +19,14 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
-        prefetch_factor=2,
+        num_workers=12,
+        prefetch_factor=4,
         pin_memory=True
     )
 
     start_time = time.time()
 
-    for idx, (input_ids, attention_masks, file_pointers) in enumerate(dataloader):
+    for idx, (input_ids, attention_masks, file_pointers) in tqdm(enumerate(dataloader)):
         logger.info(f'Processing batch: {idx}')
 
         input_ids = input_ids.to(DEVICE)
@@ -36,7 +36,7 @@ def encode(voice_encoder, dataset, batch_size, outdir):
         logger.info(f"Processed batch: {idx}")
 
         for jdx, (tokens_batch, file_pointer) in enumerate(zip(encoded_audio, file_pointers)):
-            logger.info(f"Submitted saving for iteration {jdx}, batch: {idx}")
+            logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
             save_audio_tokens(tokens_batch, file_pointer, outdir)
 
 
@@ -60,9 +60,9 @@ if __name__ == '__main__':
         --device cuda:0
     """
     import argparse
-    from datasets import load_dataset
+    import random
 
-    set_process_affinity(os.getpid(), list(range(0, 12)))
+    set_process_affinity(os.getpid(), list(range(0, 20)))
 
     parser = argparse.ArgumentParser(description='Encode audio files.')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
@@ -77,7 +77,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEVICE = args.device
 
-    files = get_dataset_files(args.indir, args.hf_dataset)
+    ALL_EXTS = AUDIO_EXTS + TAR_EXTS + ZIP_EXTS
+    files = find_files(args.indir, ALL_EXTS)
+    random.shuffle(files)
+
     logger.info(f'Found {len(files)} audio files in the dataset.')
 
     if args.tokenizer == 'encodec':
@@ -104,7 +107,7 @@ if __name__ == '__main__':
         from .encoder import HubertEncoder, hubert_processor
         from .configs import HubertEncoderConfig
 
-        encoder = HubertEncoder(device=DEVICE) # type: ignore
+        encoder = HubertEncoder(device=DEVICE, batch_size=args.batch_size) # type: ignore
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 

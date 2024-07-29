@@ -1,11 +1,17 @@
+import io
 import os
 import torch
 import psutil
+import zipfile
+import tarfile
 import numpy as np
 import torchaudio
+
 from tqdm import tqdm
+from torchaudio.io import StreamReader
 from encodec.utils import convert_audio
 from datasets import load_dataset
+from typing import IO, Generator
 
 from .configs import AudioConfig
 from .logger import logger
@@ -26,8 +32,100 @@ def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     return audio
 
 
+def process_audio_chunks(
+    file_name,
+    file_stream,
+    chunk_size,
+    target_sample_rate
+):
+    streamer = StreamReader(file_stream)
+    # metadata = streamer.get_src_stream_info(0)
+
+    streamer.add_basic_audio_stream(
+        frames_per_chunk=int(chunk_size*target_sample_rate),
+        sample_rate=target_sample_rate,
+        decoder_option={"threads": "0"}
+    )
+
+    for idx, (chunk,) in enumerate(streamer.stream()):
+        assert chunk.shape[-1] == 1, f"Audio needs to be mono, provided {chunk.shape[-1]} channels for {file_name}"
+
+        start_idx = idx * chunk_size
+        end_idx = start_idx + chunk_size
+        base, ext = os.path.splitext(file_name)
+        updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
+
+        yield chunk.reshape(1, -1), updated_file_name
+
+
+def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
+    """
+    Given a zip file, this function reads a single audio file
+    at once and returns the raw bytes of the audio file
+
+    Args:
+        x (os.PathLike)
+
+    Yields:
+        Generator[tuple[IO[bytes], str], None, None]
+    """
+    with zipfile.ZipFile(x, 'r') as zip_file:
+        for file_info in zip_file.infolist():
+            if file_info.is_dir():
+                continue
+
+            file_content = zip_file.open(file_info.filename)
+            file_name = file_info.filename
+
+            if file_content is None:
+                logger.error(f"Error extracting file {file_info.filename} from {x}")
+                continue
+
+            yield from process_audio_chunks(
+                file_name=file_name,
+                file_stream=file_content,
+                target_sample_rate=model_sample_rate,
+                chunk_size=30
+            )
+
+            logger.info(f'Processed one file in zip: {x}')
+
+
+def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
+    """
+    Given a tar file, this function reads a single audio file
+    at once and returns the raw bytes of the audio file
+
+    Args:
+        x (os.PathLike)
+
+    Yields:
+        Generator[tuple[IO[bytes], str], None, None]
+    """
+    with tarfile.open(x, 'r') as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+
+            file_content = tar.extractfile(member)
+            file_name = member.name
+
+            if file_content is None:
+                logger.error(f"Error extracting file {file_name} from {x}")
+                continue
+
+            yield from process_audio_chunks(
+                file_name=file_name,
+                file_stream=file_content,
+                target_sample_rate=model_sample_rate,
+                chunk_size=30
+            )
+
+            logger.info(f'Processed one file in tar: {x}')
+
+
 def find_audio_files(folder):
-    audio_extensions = ('.mp3', '.flac', '.wav', '.ogg')
+    audio_extensions = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
     audio_files = []
 
     # Walk through the directory and its subdirectories
@@ -49,7 +147,7 @@ def find_files(folder, extensions):
             if file.lower().endswith(extensions):
                 tokens_files.append(os.path.join(root, file))
 
-    logger.info(f'Found {len(tokens_files)} tokens files in {folder}')
+    logger.info(f'Found {len(tokens_files)} files in {folder}')
     return tokens_files
 
 
@@ -105,7 +203,7 @@ def get_dataset_files(indir: str, hf_dataset: str):
 
     ds = load_dataset(
         hf_dataset,
-        "xs",
+        "s",
         trust_remote_code=True,
         token=os.environ.get("HF_TOKEN"),
     )["train"]
@@ -137,3 +235,14 @@ def set_process_affinity(process_id, cores):
     """
     p = psutil.Process(process_id)
     p.cpu_affinity(cores)
+
+
+def load_vq_weights(model_weights, model):
+    new_state_dict = {}
+
+    for k, v in model_weights.items():
+        new_state_dict[k] = v
+
+    model.load_state_dict(new_state_dict)
+
+    return model
