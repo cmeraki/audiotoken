@@ -151,6 +151,14 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     )
     vq.to(DEVICE) # type:ignore
 
+    new_state_dict = {}
+    old_vq = torch.load('data/vq_hubert_60k_run4/quanitzer__L11_C2048_ckpt30000.pkl', map_location=DEVICE)
+
+    for k, v in old_vq.items():
+        new_state_dict[k] = v
+
+    vq.load_state_dict(new_state_dict) # type:ignore
+
     # vq = torch.compile(vq)
     # vq(torch.randn((batch_size, EMBEDDING_DIM), device=DEVICE))
 
@@ -194,7 +202,17 @@ def main(args):
 
     # Get list of files based on either local directory or HF dataset
     files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
-    random.shuffle(files)
+    # random.shuffle(files)
+    print(f'Found {len(files)} files')
+
+    with open('./logs/processed.txt', 'r') as fp:
+        d = fp.read()
+        processed_files = []
+        for ln in d.split('\n'):
+            processed_files.append(ln)
+
+    files = [f for f in files if f not in processed_files]
+    print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
@@ -281,12 +299,11 @@ def main(args):
     pbar = tqdm(position=0, leave=True)
 
     # Iterate and train the k-means model batch by batch
-    for idx, (kmeans_batch, batch_size) in tqdm(
-        enumerate(get_features_batch(
+    for idx, (kmeans_batch, batch_size) in enumerate(get_features_batch(
             dataset=dataset,
             encoder=encoder,
             max_size=KMeansClusterConfig.batch_size
-        ))
+        )
     ):
         for layer_num, features in kmeans_batch.items():
             # kmeans_batch[k] = np.concatenate(v, axis=0)
@@ -298,6 +315,8 @@ def main(args):
                 f"Commitment loss: {commit_loss.item():.3f} | "
                 + f"active %: {indices.unique().numel() / args.num_clusters * 100:.3f}"
             )
+            pbar.n += 1
+            pbar.refresh()
 
             if idx % args.save_freq == 0:
                 ckpt_name = f"quanitzer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
@@ -313,7 +332,7 @@ if __name__ == "__main__":
     python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --device cuda
     """
 
-    set_process_affinity(os.getpid(), [p for p in range(10)])
+    set_process_affinity(os.getpid(), [p for p in range(22)])
 
     parser = get_parser()
     args = parser.parse_args()

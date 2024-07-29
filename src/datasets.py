@@ -182,6 +182,12 @@ class AudioBatchDataset(IterableDataset):
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
+            with open('logs/processed.txt', 'a') as fp:
+                fp.write(file_path)
+                fp.write('\n')
+
+            logger.info(f"Processed complete file at {file_path}")
+
     def __del__(self):
         pass
         # self.pbar.close()
@@ -196,12 +202,13 @@ if __name__ == '__main__':
     from .utils import find_files
 
     parser = ArgumentParser()
+    parser.add_argument('--indir', type=str, required=True, help='Folder to load')
     parser.add_argument('--tokenizer', choices=['encodec', 'hubert', 'w2vbert2', 'whisper'], type=str, required=True, help='Encoder to run.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
     parser.add_argument('--workers', type=int, default=4, help='Batch size for encoding.')
 
     args = parser.parse_args()
-    files = find_files('/home/romit/Downloads/audio/', TAR_EXTS)
+    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
 
     print('Found files:', len(files))
 
@@ -256,11 +263,11 @@ if __name__ == '__main__':
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=args.workers,
-        prefetch_factor=2,
+        prefetch_factor=4,
         pin_memory=True
     )
 
-    for idx, (segments, attention_masks, file_names) in enumerate(dataloader):
+    for idx, (segments, attention_masks, file_names) in tqdm(enumerate(dataloader)):
         segments = segments.to('cuda')
         attention_masks = attention_masks.to('cuda')
 
