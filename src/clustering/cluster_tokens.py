@@ -3,6 +3,7 @@
 import os
 import time
 import joblib
+import random
 import argparse
 import numpy as np
 from tqdm import tqdm
@@ -12,14 +13,15 @@ from functools import partial
 
 from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
+from vector_quantize_pytorch import VectorQuantize
 
 from ..logger import logger
-from ..configs import KMeansClusterConfig
+from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
-from ..utils import get_dataset_files, set_process_affinity
+from ..utils import set_process_affinity, find_files
 
-LAYERS = [19, -1]
-EMBEDDING_DIM = 1024
+LAYERS = [11]
+EMBEDDING_DIM = 768
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -65,10 +67,10 @@ def get_parser():
         default=16,
     )
     parser.add_argument(
-        "--epochs",
+        "--save_freq",
         type=int,
-        help="Number of epochs for k-means training",
-        default=10,
+        help="Number of steps after which the embeddings are saved",
+        default=50,
     )
     parser.add_argument(
         '--device',
@@ -80,14 +82,14 @@ def get_parser():
     return parser
 
 
-def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
+def get_features_batch(dataset, encoder, max_size=1000):
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=4,
-        prefetch_factor=2,
+        num_workers=12,
+        prefetch_factor=4,
         pin_memory=True
     )
 
@@ -101,46 +103,66 @@ def get_kmeans_batch(dataset, encoder, epochs, max_size=1000):
     accumulated_batch_size = 0
     features_batch = {}
     for l in LAYERS:
-     features_batch[l] = []
+        features_batch[l] = []
 
     start_time = time.time()
 
-    for e in tqdm(range(epochs)):
+    for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
+        logger.info(f'Processing batch: {idx}')
 
-        logger.info(f"Starting epoch: {e}")
+        input_ids = input_ids.to(DEVICE)
+        attention_masks = attention_masks.to(DEVICE)
 
-        for idx, (input_ids, attention_masks, _) in tqdm(enumerate(dataloader)):
-            logger.info(f'Processing batch: {idx}')
+        encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
 
-            input_ids = input_ids.to(DEVICE)
-            attention_masks = attention_masks.to(DEVICE)
+        for l in LAYERS:
+            single_layer = encoded_audio[l]
+            single_layer = layer_norm(single_layer)
+            logger.info(f"Layer {l}: {single_layer.shape}")
+            B, T, D = single_layer.shape
+            single_layer = single_layer.reshape(B*T, D)  # B*T, D
+            features_batch[l].append(single_layer)
 
-            encoded_audio = encoder(input_ids, attention_masks) # N, B, T, D
+        accumulated_batch_size += B*T
+
+        if accumulated_batch_size >= max_size:
+            logger.info(f"Yielding batch of size {accumulated_batch_size}")
+            logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
+            yield features_batch, accumulated_batch_size
+
+            start_time = time.time()
+            accumulated_batch_size = 0
 
             for l in LAYERS:
-                single_layer = encoded_audio[l]
-                single_layer = layer_norm(single_layer)
-                logger.info(f"Layer {l}: {single_layer.shape}")
-                B, T, D = single_layer.shape
-                single_layer = single_layer.cpu().numpy().reshape(B*T, D)  # B*T, D
-                features_batch[l].append(single_layer)
-
-            accumulated_batch_size += B*T
-
-            if accumulated_batch_size >= max_size:
-                logger.info(f"Yielding batch of size {accumulated_batch_size}")
-                logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
-                yield features_batch, accumulated_batch_size
-                start_time = time.time()
-                accumulated_batch_size = 0
-
-                for l in LAYERS:
-                    features_batch[l] = []
+                features_batch[l] = []
 
     if accumulated_batch_size > 0:
         logger.info(f"Yielding batch of size {accumulated_batch_size}")
         logger.info(f"Batch processing took {time.time() - start_time:.2f}s")
         yield features_batch, accumulated_batch_size
+
+
+def get_vq_model(n_clusters: int, batch_size: int = 16):
+    vq = VectorQuantize(
+        dim=EMBEDDING_DIM,
+        codebook_size=n_clusters,
+        decay=0.8,
+        commitment_weight=1
+    )
+    vq.to(DEVICE) # type:ignore
+
+    # new_state_dict = {}
+    # old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
+
+    # for k, v in old_vq.items():
+    #     new_state_dict[k] = v
+
+    # vq.load_state_dict(new_state_dict) # type:ignore
+
+    # vq = torch.compile(vq)
+    # vq(torch.randn((batch_size, EMBEDDING_DIM), device=DEVICE))
+
+    return vq
 
 
 def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
@@ -151,7 +173,7 @@ def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
         max_no_improvement=config.max_no_improvement,
         n_init=config.n_init,
         reassignment_ratio=config.reassignment_ratio,
-        verbose=1,
+        verbose=0,
         compute_labels=True,
         init_size=None,
     )
@@ -166,7 +188,7 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
     logger.info(f"K-means partial training took {time.time() - start_time:.2f}s")
 
     inertia = -kmodel.score(features_batch) / len(features_batch)
-    print(f"Total inertia: {round(inertia, 2)}\n")
+    logger.info(f"Total inertia: {round(inertia, 2)}\n")
 
     return kmodel
 
@@ -179,7 +201,19 @@ def main(args):
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
-    files = get_dataset_files(args.indir, args.hf_dataset)
+    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
+    files = sorted(files)
+    # random.shuffle(files)
+    print(f'Found {len(files)} files')
+
+    with open('./logs/processed.txt', 'r') as fp:
+        d = fp.read()
+        processed_files = []
+        for ln in d.split('\n'):
+            processed_files.append(ln)
+
+    files = [f for f in files if f not in processed_files]
+    print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
@@ -251,40 +285,46 @@ def main(args):
 
         encoder = HubertEncoder(
             device=args.device,
-            quantize=False
+            quantize=False,
+            batch_size=args.batch_size,
         )
 
-    # Create the k-means model
+    # Create the quantizer model
     total_batches = 0
     quantizers = {}
 
     for l in LAYERS:
-        logger.info(f'Creating k-means model for layer: {l}')
-        quantizers[l] = get_kmeans_model(
-            n_clusters=args.num_clusters,
-            config=KMeansClusterConfig,
-        )
+        logger.info(f'Creating quantizer model for layer: {l}')
+        quantizers[l] = get_vq_model(n_clusters=args.num_clusters)
+
+    pbar = tqdm(position=0, leave=True)
 
     # Iterate and train the k-means model batch by batch
-    for idx, (kmeans_batch, batch_size) in enumerate(
-        get_kmeans_batch(
+    for idx, (kmeans_batch, batch_size) in enumerate(get_features_batch(
             dataset=dataset,
             encoder=encoder,
-            epochs=args.epochs,
             max_size=KMeansClusterConfig.batch_size
         )
     ):
-        for k, v in kmeans_batch.items():
-            kmeans_batch[k] = np.concatenate(v, axis=0)
-            quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
+        for layer_num, features in kmeans_batch.items():
+            # kmeans_batch[k] = np.concatenate(v, axis=0)
+            # quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
 
-            if idx % 50 == 0:
-                ckpt_name = f"kmeans__L{k}_C{args.num_clusters}_ckpt{idx}.pkl"
+            _, indices, commit_loss = quantizers[layer_num](torch.stack(features))
+
+            pbar.set_description(
+                f"Commitment loss: {commit_loss.item():.3f} | "
+                + f"active %: {indices.unique().numel() / args.num_clusters * 100:.3f}"
+            )
+            pbar.n += 1
+            pbar.refresh()
+
+            if idx % args.save_freq == 0:
+                ckpt_name = f"quanitzer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
-                logger.info(f'Saving k-means model to {save_path}')
+                logger.info(f'Saving quanitzer to {save_path}')
 
-                with open(save_path, "wb+") as f:
-                    joblib.dump(quantizers[k], f)
+                torch.save(quantizers[layer_num].state_dict(), save_path)
 
         total_batches += batch_size
 
@@ -293,7 +333,7 @@ if __name__ == "__main__":
     python -m src.cluster_tokens --indir data/test-clean/ --outdir data/kmeans --num_cluster 1024 --device cuda
     """
 
-    set_process_affinity(os.getpid(), [p for p in range(16)])
+    set_process_affinity(os.getpid(), [p for p in range(22)])
 
     parser = get_parser()
     args = parser.parse_args()

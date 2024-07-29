@@ -4,6 +4,10 @@ from dataclasses import dataclass
 
 from huggingface_hub import hf_hub_download
 
+AUDIO_EXTS = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
+TAR_EXTS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz')
+ZIP_EXTS = ('.zip', '.ZIP')
+
 @dataclass
 class VoiceEncoderConfig:
     model_sample_rate: int = 24_000
@@ -20,16 +24,19 @@ class VoiceDecoderConfig(VoiceEncoderConfig):
 
 @dataclass
 class HubertEncoderConfig:
-    model_id: str = 'voidful/mhubert-base'
+    # TODO: Update the model paths to huggingface paths
+    # model_id: str = 'voidful/mhubert-base'
+    model_id: str = 'data/model/trimmed/hubert_11/'
     model_sample_rate: int = 16_000
     single_segment_duration: int = 10
     overlap: float = 0
-    batch_size: int = 64
+    output_layer: int = 11
     model_token_rate: int = 50
-    quantizer_path: Optional[str] = hf_hub_download(
-        repo_id=model_id,
-        filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
-    )
+    quantizer_path: str = 'data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pkl'
+    # quantizer_path: Optional[str] = hf_hub_download(
+    #     repo_id=model_id,
+    #     filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
+    # )
     pad_token: Optional[int] = 0
 
 @dataclass
@@ -85,7 +92,7 @@ class AudioConfig:
 @dataclass
 class KMeansClusterConfig:
     max_iter: int = 150
-    batch_size: int = 50000
+    batch_size: int = 64000
     max_no_improvement: int = 100
     n_init: int = 5
     reassignment_ratio: float = 0.5
