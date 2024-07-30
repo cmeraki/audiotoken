@@ -129,7 +129,8 @@ if __name__ == '__main__':
         encoder = Wav2VecBertEncoder( # type: ignore
             config=Wav2VecBertConfig(),
             quantize=True,
-            device=DEVICE
+            device=DEVICE,
+            batch_size=args.batch_size
         )
 
         dataset = AudioBatchDataset(

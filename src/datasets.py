@@ -130,8 +130,7 @@ class AudioBatchDataset(IterableDataset):
                 # Make sure that a segment is at least 1 second long
                 if segment.shape[-1] < 16000:
                     logger.warning(f'File segment {file_name} is too short. Skipping')
-                    return
-
+                    continue
 
                 if segment.shape[0] < self.segment_length:
                     padded_segment_len = self.segment_length - segment.shape[0]

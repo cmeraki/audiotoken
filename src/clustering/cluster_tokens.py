@@ -15,13 +15,15 @@ from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from vector_quantize_pytorch import VectorQuantize
 
-from ..logger import logger
+from ..logger import get_logger
 from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import set_process_affinity, find_files
 
 LAYERS = [19]
 EMBEDDING_DIM = 1024
+
+logger = get_logger('clustering.log')
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -108,7 +110,7 @@ def get_features_batch(dataset, encoder, max_size=1000):
     start_time = time.time()
 
     for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
-        logger.info(f'Processing batch: {idx}')
+        logger.info(f'Processing batch: {idx}, with size: {input_ids.shape}, {attention_masks.shape}')
 
         input_ids = input_ids.to(DEVICE)
         attention_masks = attention_masks.to(DEVICE)
@@ -202,8 +204,8 @@ def main(args):
 
     # Get list of files based on either local directory or HF dataset
     files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
-    files = sorted(files, reverse=True)
-    # random.shuffle(files)
+    # files = sorted(files)
+    random.shuffle(files)
     print(f'Found {len(files)} files')
 
     # with open('./logs/processed.txt', 'r') as fp:
@@ -239,6 +241,7 @@ def main(args):
             config=Wav2VecBertConfig(),
             device=args.device,
             batch_size=args.batch_size,
+            compile=False
         )
 
     elif args.embedder == 'hubert':
@@ -295,7 +298,7 @@ def main(args):
             pbar.refresh()
 
             if idx % args.save_freq == 0:
-                ckpt_name = f"quanitzer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
+                ckpt_name = f"quantizer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
                 logger.info(f'Saving quanitzer to {save_path}')
 

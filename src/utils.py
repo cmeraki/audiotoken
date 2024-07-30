@@ -76,6 +76,7 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
 
             file_content = zip_file.open(file_info.filename)
             file_name = file_info.filename
+            logger.info(f'Processing {file_name} in zip: {x}')
 
             if file_content is None:
                 logger.error(f"Error extracting file {file_info.filename} from {x}")
@@ -88,7 +89,7 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 chunk_size=30
             )
 
-            logger.info(f'Processed one file in zip: {x}')
+        logger.info(f'Processed {file_name} in zip: {x}')
 
 
 def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
@@ -104,6 +105,7 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
     """
     with tarfile.open(x, 'r') as tar:
         for member in tar.getmembers():
+            logger.info(f'Processing {member.name} in tar: {x}')
             if not member.isfile():
                 continue
 
@@ -121,7 +123,7 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 chunk_size=30
             )
 
-            logger.info(f'Processed one file in tar: {x}')
+            logger.info(f'Processed {file_name} in tar: {x}')
 
 
 def find_audio_files(folder):
