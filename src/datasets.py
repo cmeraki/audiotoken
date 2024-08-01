@@ -187,9 +187,9 @@ class AudioBatchDataset(IterableDataset):
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-            with open('logs/processed.txt', 'a') as fp:
-                fp.write(file_path)
-                fp.write('\n')
+            # with open('logs/processed_mix.txt', 'a') as fp:
+            #     fp.write(file_path)
+            #     fp.write('\n')
 
             logger.info(f"Processed complete file at {file_path}")
 

@@ -194,8 +194,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
         quantize: bool = False,
         device: str = 'cpu',
         compile: bool = True,
-        batch_size: int = 128,
-        multi_gpu: bool = False
+        batch_size: int = 128
     ):
 
         super().__init__()
@@ -210,17 +209,12 @@ class Wav2VecBertEncoder(torch.nn.Module):
             stride=2,
             padding_value=1,
             pad_to_multiple_of=segment_length,
-            device=device,
         )
 
         self.output_layer = config.output_layer
 
         self.model = Wav2Vec2BertModel.from_pretrained(model_id)
         self.quantize = quantize
-
-        if multi_gpu and torch.cuda.device_count() > 1:
-            logger.info(f"Using {torch.cuda.device_count()} GPUs")
-            self.model = torch.nn.DataParallel(self.model)
 
         self.model.to(device)
 
@@ -234,12 +228,21 @@ class Wav2VecBertEncoder(torch.nn.Module):
         )
 
         if self.quantize:
-            kmeans_path = Path(config.quantizer_path) # type: ignore
-            km = joblib.load(kmeans_path)
+            self.vq = VectorQuantize(
+                dim=1024,
+                codebook_size=2048,
+                decay=0.8,
+                commitment_weight=1
+            )
+            self.vq.to(device)  # type: ignore
+            self.vq.eval()
 
-            self.C = torch.from_numpy(km.cluster_centers_).to(device)
+            model_weights = torch.load(config.quantizer_path, map_location=device)
 
-            del(km)
+            self.vq = load_vq_weights(
+                model_weights=model_weights,
+                model=self.vq,
+            )
 
         if compile:
             self.model = torch.compile(self.model)
@@ -271,14 +274,12 @@ class Wav2VecBertEncoder(torch.nn.Module):
                     embeddings = self.layer_norm(embeddings)
 
                     logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
-                    # Compute L2 norm
-                    distances = torch.cdist(embeddings, self.C)  # (B, T, K)
-                    min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
 
-                    min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
-                    logger.info(f'Min dist size: {min_dist.shape}')
+                    _, clusters, _ = self.vq(embeddings) # (B, T, 1)
+                    clusters = clusters.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                    logger.info(f'Clusters size: {clusters.shape}')
 
-                    return min_dist
+                    return clusters
 
                 return embeddings
 
@@ -448,7 +449,7 @@ if __name__ == '__main__':
             )
 
             encoded = wav2vec_encoder(a.to(device), am.to(device))
-            save_audio_tokens(encoded, audio_config, args.outdir)
+            save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
 
         print(f'Wav2Vec encoding took {time() - start_time:.2f}s')
 

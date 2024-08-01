@@ -50,27 +50,34 @@ class Wav2VecBertProcessor(torch.nn.Module):
         stride=2,
         padding_value: float = 1.0,
         pad_to_multiple_of: int = 2,
-        device: str = 'cpu',
     ):
         super().__init__()
-
-        self.device = device
 
         self.stride = stride
         self.padding_value = padding_value
         self.pad_to_multiple_of = pad_to_multiple_of
 
-        mel_filters = mel_filter_bank(
-            num_frequency_bins=256,
-            num_mel_filters=num_mel_bins,
-            min_frequency=20,
-            max_frequency=sampling_rate // 2,
-            sampling_rate=sampling_rate,
-        ).to(device)
-        window = torch.pow(torch.hann_window(400, periodic=False, device=device), 0.85)
+        self.num_frequency_bins = 256
+        self.sampling_rate = sampling_rate
+        self.num_mel_bins = num_mel_bins
 
-        self.register_buffer('mel_filters', F.pad(mel_filters, (0, 0, 0, 1)))
-        self.register_buffer('window', window)
+        # Move device-specific operations to forward method
+        self.register_buffer('window', None)
+        self.register_buffer('mel_filters', None)
+
+    def _initialize_buffers(self, device):
+        if self.window is None or self.mel_filters is None:
+            mel_filters = mel_filter_bank(
+                num_frequency_bins=self.num_frequency_bins,
+                num_mel_filters=self.num_mel_bins,
+                min_frequency=20,
+                max_frequency=self.sampling_rate // 2,
+                sampling_rate=self.sampling_rate,
+            ).to(device)
+            window = torch.pow(torch.hann_window(400, periodic=False, device=device), 0.85)
+
+            self.register_buffer('mel_filters', torch.nn.Parameter(F.pad(mel_filters, (0, 0, 0, 1))))
+            self.register_buffer('window', torch.nn.Parameter(window))
 
     def _create_spectrogram_mask(
         self,
@@ -134,6 +141,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
         waveform: torch.Tensor,
         window: torch.Tensor,
         mel_filters: torch.Tensor,
+        device: str,
         **kwargs
     ) -> torch.Tensor:
 
@@ -152,8 +160,8 @@ class Wav2VecBertProcessor(torch.nn.Module):
         num_frames = int(1 + math.floor((num_samples - frame_length) / hop_length))
         num_frequency_bins = (fft_length // 2) + 1
 
-        spectrogram = torch.empty((batch_size, num_frames, num_frequency_bins), dtype=torch.cfloat, device=self.device)
-        buffer = torch.zeros(batch_size, fft_length, device=self.device)
+        spectrogram = torch.empty((batch_size, num_frames, num_frequency_bins), dtype=torch.cfloat, device=device)
+        buffer = torch.zeros(batch_size, fft_length, device=device)
 
         timestep = 0
         for frame_idx in range(num_frames):
@@ -202,6 +210,9 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
     def forward(self, raw_speech: torch.Tensor, mask: torch.Tensor) -> Dict[str, torch.Tensor]:
 
+        device = raw_speech.device
+        self._initialize_buffers(device)
+
         assert len(raw_speech.shape) == 2, "Input tensor must have shape [batch, time]"
 
         spectrogram_config = {
@@ -218,6 +229,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
             raw_speech,
             window=self.window,
             mel_filters=self.mel_filters,
+            device=device,
             **spectrogram_config
         )
 
@@ -228,7 +240,6 @@ class Wav2VecBertProcessor(torch.nn.Module):
             **spectrogram_config
         )
 
-        # Normalize per mel bin and mask the features
         mean, var = self._compute_masked_mean_var(features, spectrogram_mask)
         features = (features - mean) / torch.sqrt(var + 1e-7)
 
@@ -318,8 +329,7 @@ if __name__ == '__main__':
         sampling_rate=16000,
         stride=2,
         padding_value=1,
-        pad_to_multiple_of=500,
-        device=device,
+        pad_to_multiple_of=500
     )
 
     start_time = time.time()

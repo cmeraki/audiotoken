@@ -20,9 +20,6 @@ from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import set_process_affinity, find_files
 
-LAYERS = [19]
-EMBEDDING_DIM = 1024
-
 logger = get_logger('clustering.log')
 
 def get_parser():
@@ -154,7 +151,7 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     vq.to(DEVICE) # type:ignore
 
     # new_state_dict = {}
-    # old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
+    # old_vq = torch.load('data/vq_w2vbert2_60k_run1/quantizer__L19_C2048_ckpt62500.pkl', map_location=DEVICE)
 
     # for k, v in old_vq.items():
     #     new_state_dict[k] = v
@@ -198,6 +195,9 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
 def main(args):
 
     global DEVICE
+    global LAYERS
+    global EMBEDDING_DIM
+
     DEVICE = args.device
 
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
@@ -226,6 +226,9 @@ def main(args):
         from ..configs import Wav2VecBertConfig
         from ..encoder import Wav2VecBertEncoder
 
+        LAYERS = [19]
+        EMBEDDING_DIM = 1024
+
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
 
         dataset = AudioBatchDataset(
@@ -248,6 +251,9 @@ def main(args):
         from transformers import Wav2Vec2FeatureExtractor
         from ..encoder import HubertEncoder, hubert_processor
         from ..configs import HubertEncoderConfig
+
+        LAYERS = [11]
+        EMBEDDING_DIM = 768
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
         tranform_func = partial(hubert_processor, processor=processor)
@@ -285,10 +291,13 @@ def main(args):
         )
     ):
         for layer_num, features in kmeans_batch.items():
+            start_time = time.time()
             # kmeans_batch[k] = np.concatenate(v, axis=0)
             # quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
 
             _, indices, commit_loss = quantizers[layer_num](torch.stack(features))
+
+            logger.info(f"VQ took {time.time() - start_time:.2f}s")
 
             pbar.set_description(
                 f"Commitment loss: {commit_loss.item():.3f} | "
