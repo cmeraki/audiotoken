@@ -76,6 +76,7 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
 
             file_content = zip_file.open(file_info.filename)
             file_name = file_info.filename
+            logger.info(f'Processing {file_name} in zip: {x}')
 
             if file_content is None:
                 logger.error(f"Error extracting file {file_info.filename} from {x}")
@@ -88,7 +89,7 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 chunk_size=30
             )
 
-            logger.info(f'Processed one file in zip: {x}')
+        logger.info(f'Processed {file_name} in zip: {x}')
 
 
 def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
@@ -104,6 +105,7 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
     """
     with tarfile.open(x, 'r') as tar:
         for member in tar.getmembers():
+            logger.info(f'Processing {member.name} in tar: {x}')
             if not member.isfile():
                 continue
 
@@ -121,7 +123,7 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 chunk_size=30
             )
 
-            logger.info(f'Processed one file in tar: {x}')
+            logger.info(f'Processed {file_name} in tar: {x}')
 
 
 def find_audio_files(folder):
@@ -235,6 +237,51 @@ def set_process_affinity(process_id, cores):
     """
     p = psutil.Process(process_id)
     p.cpu_affinity(cores)
+
+
+def hertz_to_mel(freq: torch.Tensor) -> torch.Tensor:
+    """
+    Convert frequency in Hertz to Mel scale using Kaldi scale
+
+    Args:
+        freq (torch.Tensor)
+
+    Returns:
+        torch.Tensor
+    """
+    return 1127.0 * torch.log(1.0 + (freq / 700.0))
+
+
+def mel_to_hertz(mels: torch.Tensor) -> torch.Tensor:
+    """
+    Convert frequency in Mel scale to Hertz using Kaldi scale
+
+    Args:
+        mels (torch.Tensor): _description_
+
+    Returns:
+        torch.Tensor: _description_
+    """
+    return 700.0 * (torch.exp(mels / 1127.0) - 1.0)
+
+
+def create_triangular_filter_bank(fft_freqs: torch.Tensor, filter_freqs: torch.Tensor) -> torch.Tensor:
+    """
+    Create a triangular filter bank given the fft frequencies and filter frequencies
+
+    Args:
+        fft_freqs (torch.Tensor): _description_
+        filter_freqs (torch.Tensor): _description_
+
+    Returns:
+        torch.Tensor: _description_
+    """
+    filter_diff = torch.diff(filter_freqs)
+    slopes = filter_freqs.unsqueeze(0) - fft_freqs.unsqueeze(1)
+    down_slopes = -slopes[:, :-2] / filter_diff[:-1]
+    up_slopes = slopes[:, 2:] / filter_diff[1:]
+
+    return torch.maximum(torch.zeros(1), torch.minimum(down_slopes, up_slopes))
 
 
 def load_vq_weights(model_weights, model):

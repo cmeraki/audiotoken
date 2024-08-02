@@ -190,7 +190,8 @@ class OptimizedSeamlessM4TFeatureExtractor():
         feature_size=80,
         sampling_rate=16000,
         num_mel_bins=80,
-        padding_value=0.0,
+        padding_value=1.0,
+        pad_to_multiple_of=2,
         stride=2,
         **kwargs,
     ):
@@ -210,6 +211,8 @@ class OptimizedSeamlessM4TFeatureExtractor():
         self.num_mel_bins = num_mel_bins
         self.return_attention_mask = True
         self.stride = stride
+        self.padding_value = padding_value
+        self.pad_to_multiple_of = pad_to_multiple_of
 
         mel_filters = mel_filter_bank(
             num_frequency_bins=256,
@@ -248,20 +251,69 @@ class OptimizedSeamlessM4TFeatureExtractor():
         features = features.T
         return features
 
+    def pad(self, arr: np.ndarray):
+        N, D = arr.shape
+
+        P = 0
+        if self.pad_to_multiple_of > 0:
+            P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if N % self.pad_to_multiple_of > 0 else 0
+
+        # Create the padded array
+        padded_array = np.pad(arr, ((0, P), (0, 0)), mode='constant', constant_values=self.padding_value)
+
+        # Create the attention mask
+        attention_mask = np.ones(N + P, dtype=np.int32)
+        attention_mask[N:] = 0
+
+        return padded_array, attention_mask
+
     def __call__(
         self,
         raw_speech: Union[np.ndarray],
     ):
-        features = [self._extract_fbank_features(waveform) for waveform in raw_speech]
-        return features
+        padded_inputs = {  # type: ignore
+            "input_features": [],
+            "attention_mask": []
+        }
 
-        # Normalize per mel bin
-        features = [
-            (x - np.expand_dims(x.mean(0), 0)) / np.sqrt(np.expand_dims(x.var(0, ddof=1), 0) + 1e-7)
-            for x in features
-        ]
+        if len(raw_speech.shape) > 1:
+            speech = raw_speech
+        else:
+            speech = np.expand_dims(raw_speech, 0)
 
-        return features
+        for w in speech:
+            features = self._extract_fbank_features(w)
+
+            # Normalize per mel bin
+            features = (features - np.expand_dims(features.mean(0), 0)) / np.sqrt(np.expand_dims(features.var(0, ddof=1), 0) + 1e-7)
+
+            padded_features = self.pad(features)
+            input_features = padded_features[0]
+            attention_mask = padded_features[1]
+
+            num_frames, num_channels = input_features.shape
+
+            remainder = num_frames % self.stride
+
+            if remainder != 0:
+                input_features = input_features[:num_frames, :]
+                attention_mask = attention_mask[:num_frames]
+
+            input_features = np.reshape(
+                input_features, (num_frames // self.stride, num_channels * self.stride)
+            )
+
+            indices = np.arange(0, num_frames)
+            attention_mask = attention_mask[indices % self.stride == 1]
+
+            padded_inputs["input_features"].append(input_features)
+            padded_inputs["attention_mask"].append(attention_mask)
+
+        padded_inputs['input_features'] = np.stack(padded_inputs['input_features'], axis=0) # type: ignore
+        padded_inputs['attention_mask'] = np.stack(padded_inputs['attention_mask'], axis=0) # type: ignore
+
+        return padded_inputs
+
 
 import torch
 from src.utils import read_audio
@@ -278,8 +330,9 @@ def optim_impl(a):
     )
     out = feature_extractor(a)
 
-    return torch.from_numpy(out[0])
+    return out
 
 if __name__ == '__main__':
-    audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore
+    audio = read_audio('./data/test-clean/LibriSpeech/test-clean/7021/85628/7021-85628-0005.flac', 16_000) # type: ignore
     o = optim_impl(audio)
+    print(f'Shape: {o["input_features"].shape}, {o["attention_mask"].shape}')

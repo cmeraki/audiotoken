@@ -15,13 +15,12 @@ from torch.utils.data import DataLoader
 from sklearn.cluster import MiniBatchKMeans
 from vector_quantize_pytorch import VectorQuantize
 
-from ..logger import logger
+from ..logger import get_logger
 from ..configs import KMeansClusterConfig, TAR_EXTS, AUDIO_EXTS, ZIP_EXTS
 from ..datasets import AudioBatchDataset, collate_fn
 from ..utils import set_process_affinity, find_files
 
-LAYERS = [11]
-EMBEDDING_DIM = 768
+logger = get_logger('clustering.log')
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -70,7 +69,7 @@ def get_parser():
         "--save_freq",
         type=int,
         help="Number of steps after which the embeddings are saved",
-        default=50,
+        default=100,
     )
     parser.add_argument(
         '--device',
@@ -108,7 +107,7 @@ def get_features_batch(dataset, encoder, max_size=1000):
     start_time = time.time()
 
     for idx, (input_ids, attention_masks, _) in enumerate(dataloader):
-        logger.info(f'Processing batch: {idx}')
+        logger.info(f'Processing batch: {idx}, with size: {input_ids.shape}, {attention_masks.shape}')
 
         input_ids = input_ids.to(DEVICE)
         attention_masks = attention_masks.to(DEVICE)
@@ -152,7 +151,7 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     vq.to(DEVICE) # type:ignore
 
     # new_state_dict = {}
-    # old_vq = torch.load('data/vq_hubert_60k_run5/quanitzer__L11_C2048_ckpt11000.pk', map_location=DEVICE)
+    # old_vq = torch.load('data/vq_w2vbert2_60k_run1/quantizer__L19_C2048_ckpt62500.pkl', map_location=DEVICE)
 
     # for k, v in old_vq.items():
     #     new_state_dict[k] = v
@@ -196,24 +195,27 @@ def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBat
 def main(args):
 
     global DEVICE
+    global LAYERS
+    global EMBEDDING_DIM
+
     DEVICE = args.device
 
     logger.info(f"Process running on core: {psutil.Process().cpu_affinity()}")
 
     # Get list of files based on either local directory or HF dataset
-    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
-    files = sorted(files)
-    # random.shuffle(files)
+    files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
+    # files = sorted(files)
+    random.shuffle(files)
     print(f'Found {len(files)} files')
 
-    with open('./logs/processed.txt', 'r') as fp:
-        d = fp.read()
-        processed_files = []
-        for ln in d.split('\n'):
-            processed_files.append(ln)
+    # with open('./logs/processed.txt', 'r') as fp:
+    #     d = fp.read()
+    #     processed_files = []
+    #     for ln in d.split('\n'):
+    #         processed_files.append(ln)
 
-    files = [f for f in files if f not in processed_files]
-    print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
+    # files = [f for f in files if f not in processed_files]
+    # print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)
@@ -222,15 +224,16 @@ def main(args):
         # Create the dataset and the encoder
         from transformers import AutoFeatureExtractor
         from ..configs import Wav2VecBertConfig
-        from ..encoder import w2vbert2_processor, Wav2VecBertEncoder
+        from ..encoder import Wav2VecBertEncoder
+
+        LAYERS = [19]
+        EMBEDDING_DIM = 1024
 
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            post_transform=post_transform_func,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
@@ -239,37 +242,18 @@ def main(args):
         # Create the encoder model
         encoder = Wav2VecBertEncoder(
             config=Wav2VecBertConfig(),
-            device=args.device
-        )
-
-    elif args.embedder == 'whisper':
-        # Create the dataset and the encoder
-        from transformers import WhisperFeatureExtractor
-        from ..configs import WhisperEncoderConfig
-        from ..encoder import WhisperEncoder, whisper_processor
-
-        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
-        post_transform_func = partial(whisper_processor, processor=processor)
-
-        dataset = AudioBatchDataset(
-            files,
-            sample_rate=WhisperEncoderConfig.model_sample_rate,
-            post_transform=post_transform_func,
-            single_segment_duration=WhisperEncoderConfig.single_segment_duration,
-            model_token_rate=WhisperEncoderConfig.model_token_rate,
-            pad_token=WhisperEncoderConfig.pad_token,
-        )
-
-        encoder = WhisperEncoder(
-            config=WhisperEncoderConfig(),
-            quantize=False,
             device=args.device,
+            batch_size=args.batch_size,
+            compile=False
         )
 
     elif args.embedder == 'hubert':
         from transformers import Wav2Vec2FeatureExtractor
         from ..encoder import HubertEncoder, hubert_processor
         from ..configs import HubertEncoderConfig
+
+        LAYERS = [11]
+        EMBEDDING_DIM = 768
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
         tranform_func = partial(hubert_processor, processor=processor)
@@ -307,10 +291,13 @@ def main(args):
         )
     ):
         for layer_num, features in kmeans_batch.items():
+            start_time = time.time()
             # kmeans_batch[k] = np.concatenate(v, axis=0)
             # quantizers[k] = train_kmeans(quantizers[k], kmeans_batch[k])
 
             _, indices, commit_loss = quantizers[layer_num](torch.stack(features))
+
+            logger.info(f"VQ took {time.time() - start_time:.2f}s")
 
             pbar.set_description(
                 f"Commitment loss: {commit_loss.item():.3f} | "
@@ -320,7 +307,7 @@ def main(args):
             pbar.refresh()
 
             if idx % args.save_freq == 0:
-                ckpt_name = f"quanitzer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
+                ckpt_name = f"quantizer__L{layer_num}_C{args.num_clusters}_ckpt{idx}.pkl"
                 save_path = os.path.join(args.outdir, ckpt_name)
                 logger.info(f'Saving quanitzer to {save_path}')
 

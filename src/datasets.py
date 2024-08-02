@@ -127,6 +127,11 @@ class AudioBatchDataset(IterableDataset):
                 audio_config.start_idx = i
                 audio_config.end_idx = min(i + self.segment_length, length)
 
+                # Make sure that a segment is at least 1 second long
+                if segment.shape[-1] < 16000:
+                    logger.warning(f'File segment {file_name} is too short. Skipping')
+                    continue
+
                 if segment.shape[0] < self.segment_length:
                     padded_segment_len = self.segment_length - segment.shape[0]
 
@@ -182,7 +187,7 @@ class AudioBatchDataset(IterableDataset):
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-            # with open('logs/processed.txt', 'a') as fp:
+            # with open('logs/processed_mix.txt', 'a') as fp:
             #     fp.write(file_path)
             #     fp.write('\n')
 
@@ -210,7 +215,7 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, default=4, help='Batch size for encoding.')
 
     args = parser.parse_args()
-    files = find_files(args.indir, TAR_EXTS + ZIP_EXTS)
+    files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
     files = sorted(files)
 
     print('Found files:', len(files))
@@ -244,18 +249,12 @@ if __name__ == '__main__':
         )
 
     elif args.tokenizer == 'w2vbert2':
-        from transformers import AutoFeatureExtractor
-        from .encoder import w2vbert2_processor
         from .configs import Wav2VecBertConfig
-
-        processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
-        post_transform_func = partial(w2vbert2_processor, processor=processor)
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
-            post_transform=post_transform_func,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )
