@@ -1,71 +1,90 @@
+import os
+import torch
 import numpy as np
-from typing import List, Union
+from typing import List, Union, Optional
+
+from .configs import TOKENIZERS
+from .utils import read_audio, process_audio_chunks
+from .datasets import AudioBatchDataset
 
 class AudioToken:
-    def __init__(self, model: str = "default"):
-        self.model = model
-        # Initialize the tokenizer model
+    def __init__(
+            self,
+            tokenizer: TOKENIZERS,
+            device: str = "cpu",
+            compile: bool = False
+        ):
 
-    @staticmethod
-    def get_encoder(model: str = "default") -> 'AudioToken':
-        return AudioToken(model)
+        # supported_tokenzers = TOKENIZERS._member_names_
+        # assert tokenizer in supported_tokenzers, f"Tokenizer {tokenizer} not supported. Should be one of {supported_tokenzers}"
 
-    def encode(self, audio: Union[np.ndarray, bytes, str, List[Union[np.ndarray, bytes, str]]]) -> Union[List[int], List[List[int]]]:
-        if isinstance(audio, list):
-            return [self._encode_single(a) for a in audio]
-        else:
-            return self._encode_single(audio)
+        self.tokenizer: torch.nn.Module
+        self.device = device
 
-    def decode(self, tokens: Union[List[int], List[List[int]]]) -> Union[np.ndarray, List[np.ndarray]]:
-        if isinstance(tokens[0], list):
-            return [self._decode_single(t) for t in tokens]
-        else:
-            return self._decode_single(tokens)
+        if tokenizer == TOKENIZERS.ACOUSTIC:
+            from .encoder import AcousticEncoder
+            from .configs import AcousticEncoderConfig
 
-    def _encode_single(self, audio: Union[np.ndarray, bytes, str]) -> List[int]:
-        if isinstance(audio, str):
-            # Load audio file
-            audio = self._load_audio_file(audio)
+            self.tokenizer = AcousticEncoder(device=device)
+            self.config = AcousticEncoderConfig()
+
+        elif tokenizer == TOKENIZERS.SEMANTIC_M:
+            from .encoder import Wav2VecBertEncoder
+            from .configs import Wav2VecBertConfig
+
+            self.tokenizer = Wav2VecBertEncoder(device=device, quantize=True)
+            self.config = Wav2VecBertConfig() # type: ignore
+
+        self.tokenizer.eval()
+        if compile:
+            self.tokenizer = torch.compile(self.tokenizer)  # type: ignore
+
+    def encode(
+            self,
+            audio: Union[np.ndarray, os.PathLike, bytes],
+            chunk_size: Optional[int] = None
+        ) -> np.ndarray:
+
+        if isinstance(audio, np.ndarray):
+            return self._encode_single(torch.from_numpy(audio))
+
+        elif isinstance(audio, os.PathLike):
+            if chunk_size is None:
+                audio_sample = read_audio(audio, self.config.model_sample_rate) # type: ignore
+                return self._encode_single(audio_sample)
+
+            else:
+                with open(audio, "rb") as file_stream:
+                    processed_chunks = [self._encode_single(chunk)[0] for chunk, _ in process_audio_chunks(audio, file_stream, chunk_size, self.config.model_sample_rate)]
+
+                return np.array(processed_chunks)
+
         elif isinstance(audio, bytes):
-            # Convert bytes to numpy array
-            audio = np.frombuffer(audio, dtype=np.float32)
-        
-        # Implement actual tokenization logic here
-        # This is a placeholder implementation
-        tokens = [hash(str(sample)) % 1000 for sample in audio]
-        return tokens
+            raise NotImplementedError("Encoding bytes not supported yet")
 
-    def _decode_single(self, tokens: List[int]) -> np.ndarray:
-        # Implement actual detokenization logic here
-        # This is a placeholder implementation
-        audio = np.array(tokens, dtype=np.float32)
-        return audio
+        else:
+            raise ValueError(f"Unsupported input type {type(audio)}")
 
-    def _load_audio_file(self, file_path: str) -> np.ndarray:
-        # Implement audio file loading logic here
-        # This is a placeholder implementation
-        return np.random.rand(1000)
+    def _encode_single(self, audio: torch.Tensor) -> np.ndarray:
+        input_batch = audio.unsqueeze(0).to(self.device)
+        attention_mask = torch.ones_like(input_batch, device=self.device)
 
+        toks = self.tokenizer(input_batch, attention_mask)
 
-# Usage examples
-tokenizer = AudioToken.get_encoder("my_audio_model")
+        return toks.cpu().numpy()
 
-# Encode a single file
-tokens = tokenizer.encode("path/to/audio.wav")
+    def encode_batch(
+            self,
+            audio_files: List[os.PathLike]],
+            chunk_size: Optional[int] = None
+        ) -> List[np.array]:
 
-# Encode a batch of files
-batch_tokens = tokenizer.encode(["path/to/audio1.wav", "path/to/audio2.wav"])
+        pass
 
-# Encode bytes
-audio_bytes = b'\x00\x01\x02\x03'
-tokens = tokenizer.encode(audio_bytes)
+    def _encode_batch(
+            self,
+            audio: List[Union[np.ndarray, os.PathLike, bytes]],
+            chunk_size: Optional[int] = None
+        ):
 
-# Encode a batch of bytes
-batch_bytes = [b'\x00\x01\x02\x03', b'\x04\x05\x06\x07']
-batch_tokens = tokenizer.encode(batch_bytes)
-
-# Decode tokens
-audio = tokenizer.decode(tokens)
-
-# Decode batch of tokens
-batch_audio = tokenizer.decode(batch_tokens)
+        pass

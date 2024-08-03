@@ -1,16 +1,12 @@
 import torch
-import tiktoken
-import joblib
-
 from pathlib import Path
-from typing import List, Optional
 from encodec import EncodecModel
-from transformers import HubertModel, Wav2Vec2BertModel, WhisperForAudioClassification, WhisperFeatureExtractor
+from transformers import HubertModel, Wav2Vec2BertModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertSelfAttention
 from vector_quantize_pytorch import VectorQuantize
 
 from .utils import read_audio, load_vq_weights
-from .configs import HubertEncoderConfig, AudioConfig, VoiceEncoderConfig, Wav2VecBertConfig, WhisperEncoderConfig
+from .configs import HubertEncoderConfig, AudioConfig, AcousticEncoderConfig, Wav2VecBertConfig
 from .logger import logger
 from .processors import Wav2VecBertProcessor
 
@@ -33,63 +29,22 @@ def hubert_processor(audio, processor):
     ).input_values[0]
 
 
-def whisper_processor(audio, processor):
-    proc = processor(
-        audio.numpy(),
-        sampling_rate=WhisperEncoderConfig.model_sample_rate,
-        return_attention_mask=True,
-        return_tensors='pt',
-        truncation=False,
-        padding="longest",
-        pad_to_multiple_of=WhisperEncoderConfig.model_sample_rate * WhisperEncoderConfig.single_segment_duration,
-    )
-
-    return proc.input_features.transpose(1, 2), proc.attention_mask
-
-
-class TextEncoder:
-    """
-    Simple wrapper around the TikToken encoder to encode a list of strings
-    """
-
-    def __init__(self, tokenizer_name: str = "cl100k_base", num_threads: int = 12):
-        self.encoder = tiktoken.get_encoding(tokenizer_name)
-        self.num_threads = num_threads
-
-    def __call__(self, x: List[str]) -> List[List[int]]:
-        return self.encoder.encode_batch(
-            x,
-            num_threads=self.num_threads
-        )
-
-
-class VoiceEncoder:
+class AcousticEncoder(torch.nn.Module):
     def __init__(
             self,
-            bandwidth: float,
-            single_segment_duration: int,
+            config: 'AcousticEncoderConfig' = AcousticEncoderConfig(),
             device: str = 'cpu',
-            compile: bool = True
         ):
+
+        super().__init__()
 
         self.model = EncodecModel.encodec_model_24khz()
         self.model.to(device)
-        self.model.set_target_bandwidth(bandwidth)
-
-        self.device = torch.device(device)
-        self.segment_length = self.model.sample_rate * single_segment_duration
+        self.model.set_target_bandwidth(config.bandwidth)
 
         self.model.eval()
 
-        if compile:
-            self.model = torch.compile(self.model, mode="reduce-overhead")
-
-            # Warmup the model
-            input = torch.randn(1, 1, self.segment_length, device=device)
-            for _ in range(5):
-                self.model(input)
-
-    def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
+    def forward(self, input_batch: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
 
@@ -99,7 +54,6 @@ class VoiceEncoder:
                     emb, self.model.frame_rate, self.model.bandwidth
                 )
 
-                # TODO: Add cutoff support
                 codes = codes.transpose(0, 1).to(dtype=torch.int16)  # [B, K, T]
                 logger.info(f'Embedding shape: {emb.shape}, Codes shape: {codes.shape}')
 
@@ -190,16 +144,13 @@ class HubertEncoder:
 class Wav2VecBertEncoder(torch.nn.Module):
     def __init__(
         self,
-        config: Wav2VecBertConfig,
-        quantize: bool = False,
+        config: 'Wav2VecBertConfig' = Wav2VecBertConfig(),
         device: str = 'cpu',
-        compile: bool = True,
-        batch_size: int = 128
+        quantize: bool = False
     ):
 
         super().__init__()
         model_id = config.model_id
-        segment_length = config.model_token_rate * config.single_segment_duration
 
         # Defaults from huggingface
         self.processor = Wav2VecBertProcessor(
@@ -207,8 +158,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
             num_mel_bins=80,
             sampling_rate=16000,
             stride=2,
-            padding_value=1,
-            pad_to_multiple_of=segment_length,
+            padding_value=1
         )
 
         self.output_layer = config.output_layer
@@ -237,31 +187,17 @@ class Wav2VecBertEncoder(torch.nn.Module):
             self.vq.to(device)  # type: ignore
             self.vq.eval()
 
-            model_weights = torch.load(config.quantizer_path, map_location=device)
+            model_weights = torch.load(config.quantizer_path, map_location=device) # type: ignore
 
             self.vq = load_vq_weights(
                 model_weights=model_weights,
                 model=self.vq,
             )
 
-        if compile:
-            self.model = torch.compile(self.model)
-
-            # Warmup the model, model expects dimension length to be 160
-            input = torch.randn((batch_size, 500, 160), device=device)
-            am = torch.ones((batch_size, 500), device=device)
-
-            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                with torch.no_grad():
-                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
-
-            del(input)
-            del(am)
-
-    def forward(self, input_batch: torch.Tensor, mask: torch.Tensor):
+    def forward(self, input_batch: torch.Tensor, mask: torch.Tensor, pad_to_multiple_of: int = 2):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
             with torch.no_grad():
-                proc_out = self.processor(input_batch, mask)
+                proc_out = self.processor(input_batch, mask, pad_to_multiple_of)
                 input_features, attention_mask = proc_out['input_features'], proc_out['attention_mask']
 
                 logger.info(f"Batch size: {input_batch.shape}, Mask size: {mask.shape}")
@@ -284,72 +220,6 @@ class Wav2VecBertEncoder(torch.nn.Module):
                 return embeddings
 
 
-class WhisperEncoder:
-    def __init__(
-        self,
-        config: WhisperEncoderConfig,
-        quantize: bool = False,
-        device: str = 'cpu',
-        compile: bool = True
-    ):
-
-        model_id = config.model_id
-        self.segment_length = config.model_sample_rate * config.single_segment_duration
-        self.device = torch.device(device)
-
-        self.output_layer = config.output_layer
-
-        self.model = WhisperForAudioClassification.from_pretrained(model_id, attn_implementation="sdpa").to(self.device)
-        self.quantize = quantize
-
-        self.model.eval()
-
-        logger.info(f'Ouput layer: {self.output_layer}')
-
-        if self.quantize:
-            kmeans_path = Path(config.quantizer_path) # type: ignore
-            km = joblib.load(kmeans_path)
-
-            self.C = torch.from_numpy(km.cluster_centers_).to(self.device)
-
-            del(km)
-
-        if compile:
-            self.model = torch.compile(self.model)
-
-            # Warmup the model, model expects dimension length to be 160
-            input = torch.randn((1, 80, 3000), device=self.device)
-
-            for _ in range(5):
-                _ = self.model(input, output_hidden_states=True)
-
-            del(input)
-
-    def __call__(self, input_batch: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-            with torch.no_grad():
-                input_batch = input_batch.transpose(1, 2)
-                logger.info(f"Batch size: {input_batch.shape}")
-
-                embeddings = self.model.forward(input_batch, output_hidden_states=True).hidden_states # (N, B, T, D)
-                logger.info(f'Embeddings size: {len(embeddings)}, dtype: {embeddings[0].dtype}')
-
-                if self.quantize:
-                    embeddings = embeddings[self.output_layer]  # B, T, D
-
-                    # Compute L2 norm
-                    distances = torch.cdist(embeddings, self.C)  # (B, T, K)
-                    min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
-
-                    min_dist = min_dist.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
-                    logger.info(f'Min dist size: {min_dist.shape}')
-
-                    return min_dist
-
-                return embeddings
-
-
-
 if __name__ == '__main__':
     """
     python -m src.encoder --tokenizer encodec --indir /path/to/audio/files --outdir /path/to/output/directory
@@ -360,7 +230,7 @@ if __name__ == '__main__':
     from pathlib import Path
     from argparse import ArgumentParser
 
-    from .configs import VoiceEncoderConfig
+    from .configs import AcousticEncoderConfig
     from .utils import find_audio_files, save_audio_tokens
 
     parser = ArgumentParser(description='Encode audio files in indir one by one using the tokenizer specified. Writes tokens to outdir')
@@ -381,17 +251,12 @@ if __name__ == '__main__':
 
     if args.tokenizer == 'encodec':
         print(f'Encoding using encodec')
-        voice_encoder = VoiceEncoder(
-            bandwidth=VoiceEncoderConfig.bandwidth,
-            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            device=device,
-            compile=False
-        )
+        voice_encoder = AcousticEncoder(device=device)
 
         start_time = time()
 
         for p in tqdm(audio_file_paths):
-            a = read_audio(Path(p).expanduser(), VoiceEncoderConfig.model_sample_rate)
+            a = read_audio(Path(p).expanduser(), AcousticEncoderConfig.model_sample_rate)
             audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
 
             encoded = voice_encoder(a.to(device), torch.ones_like(a, device=device))
@@ -429,10 +294,8 @@ if __name__ == '__main__':
         print(f'Encoding using wav2vec')
 
         wav2vec_encoder = Wav2VecBertEncoder(
-            config=Wav2VecBertConfig(),
             quantize=True,
-            device=device,
-            compile=False
+            device=device
         )
 
         start_time = time()
@@ -448,36 +311,7 @@ if __name__ == '__main__':
                 length_tokens=50
             )
 
-            encoded = wav2vec_encoder(a.to(device), am.to(device))
+            encoded = wav2vec_encoder(a.to(device), am.to(device), pad_to_multiple_of=10*50)
             save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
 
         print(f'Wav2Vec encoding took {time() - start_time:.2f}s')
-
-    elif args.tokenizer == 'whisper':
-        print(f'Encoding using Whisper')
-
-        processor = WhisperFeatureExtractor.from_pretrained(WhisperEncoderConfig.model_id)
-        whisper_encoder = WhisperEncoder(
-            config=WhisperEncoderConfig(),
-            quantize=True,
-            device=device,
-            compile=False
-        )
-
-        start_time = time()
-
-        for p in tqdm(audio_file_paths):
-            a = read_audio(Path(p).expanduser(), 16_000)
-            i, am = whisper_processor(a, processor)
-
-            audio_config = AudioConfig(
-                file_name=p,
-                length_seconds=a.shape[-1]/16_000,
-                length_samples=a.shape[-1],
-                length_tokens=100
-            )
-
-            encoded = whisper_encoder(i.to(device), am.to(device))
-            save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
-
-        print(f'Whisper encoding took {time() - start_time:.2f}s')

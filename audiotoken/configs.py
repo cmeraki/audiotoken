@@ -1,4 +1,6 @@
+import torch
 from math import ceil
+from enum import Enum
 from typing import Optional
 from dataclasses import dataclass
 
@@ -8,18 +10,21 @@ AUDIO_EXTS = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
 TAR_EXTS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz')
 ZIP_EXTS = ('.zip', '.ZIP')
 
+
+class TOKENIZERS(Enum):
+    ACOUSTIC = "ACOUSTIC"
+    SEMANTIC_M = "SEMANTIC_M"
+
+
 @dataclass
-class VoiceEncoderConfig:
+class AcousticEncoderConfig:
     model_sample_rate: int = 24_000
     bandwidth: float = 12
-    single_segment_duration: int = 10
-    overlap: float = 0
-    batch_size: int = 64
     model_token_rate: int = 75
     pad_token: Optional[int] = 0
 
 @dataclass
-class VoiceDecoderConfig(VoiceEncoderConfig):
+class AcousticDecoderConfig(AcousticEncoderConfig):
     pass
 
 @dataclass
@@ -43,7 +48,6 @@ class HubertEncoderConfig:
 class Wav2VecBertConfig:
     model_id: str = 'facebook/w2v-bert-2.0'
     model_sample_rate: int = 16_000
-    single_segment_duration: int = 10
     model_token_rate: int = 50
     output_layer: int = 19
     quantizer_path: Optional[str] = 'data/vq_w2vbert2_60k_run1/quantizer__L19_C2048_ckpt62500.pkl'

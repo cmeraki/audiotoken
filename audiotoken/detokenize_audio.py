@@ -6,7 +6,7 @@ from queue import Queue
 from encodec.utils import save_audio
 
 from src.decoder import VoiceDecoder
-from src.configs import VoiceDecoderConfig
+from src.configs import 
 from src.utils import find_files
 
 if __name__ == '__main__':
@@ -23,9 +23,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     voice_decoder = VoiceDecoder(
-        bandwidth=VoiceDecoderConfig.bandwidth,
-        single_segment_duration=VoiceDecoderConfig.single_segment_duration,
-        overlap=VoiceDecoderConfig.overlap,
+        bandwidth=.bandwidth,
+        single_segment_duration=.single_segment_duration,
+        overlap=.overlap,
         device=args.device
     )
 

@@ -82,24 +82,20 @@ if __name__ == '__main__':
     random.shuffle(files)
 
     logger.info(f'Found {len(files)} audio files in the dataset.')
+    single_segment_duration = 10
 
     if args.tokenizer == 'encodec':
-        from .encoder import VoiceEncoder
-        from .configs import VoiceEncoderConfig
+        from .encoder import AcousticEncoder
+        from .configs import AcousticEncoderConfig
 
-        encoder = VoiceEncoder(
-            bandwidth=VoiceEncoderConfig.bandwidth,
-            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            device=DEVICE,
-            compile=False
-        )
+        encoder = AcousticEncoder(device=DEVICE)
 
         dataset = AudioBatchDataset(
             files,
-            sample_rate=VoiceEncoderConfig.model_sample_rate,
-            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            model_token_rate=VoiceEncoderConfig.model_token_rate,
-            pad_token=VoiceEncoderConfig.pad_token
+            sample_rate=AcousticEncoderConfig.model_sample_rate,
+            single_segment_duration=single_segment_duration,
+            model_token_rate=AcousticEncoderConfig.model_token_rate,
+            pad_token=AcousticEncoderConfig.pad_token
         )
 
     elif args.tokenizer == 'hubert':
@@ -127,22 +123,23 @@ if __name__ == '__main__':
         from .configs import Wav2VecBertConfig
 
         encoder = Wav2VecBertEncoder( # type: ignore
-            config=Wav2VecBertConfig(),
             quantize=True,
-            device=DEVICE,
-            batch_size=args.batch_size
+            device=DEVICE
         )
 
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            single_segment_duration=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # TODO: Add compile support
+    print(f'Model is not compiled')
 
     encode(
         voice_encoder=encoder,

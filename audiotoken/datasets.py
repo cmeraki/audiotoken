@@ -1,7 +1,5 @@
 import torch
 import math
-import zipfile
-import tarfile
 import numpy as np
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -27,7 +25,6 @@ class AudioBatchDataset(IterableDataset):
             single_segment_duration: int,
             model_token_rate: int,
             transform=None,
-            post_transform=None,
             pad_token: Optional[int] = 0,
             overlap: float = 0
         ):
@@ -43,7 +40,6 @@ class AudioBatchDataset(IterableDataset):
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
         self.transform = transform
-        self.post_transform = post_transform
         self.pad_token = pad_token
 
         self.single_segment_duration = single_segment_duration
@@ -92,53 +88,24 @@ class AudioBatchDataset(IterableDataset):
             length_tokens=self.model_token_rate
         )
 
-        # If post transform is provided it is assumed that the transform
-        # will take in the audio and produce (N, D) tensor where N = number of tokens
-        # and D = dimension of the token
-        if self.post_transform:
-            input_ids, attention_mask = self.post_transform(waveform)
-            input_ids, attention_mask = input_ids.squeeze(0), attention_mask.squeeze(0)
-            stride = self.model_token_rate * self.single_segment_duration
+        for i in range(0, length, self.stride):
+            segment = waveform[0, i:i+self.segment_length]
+            attention_mask = torch.ones(segment.shape[0])
+            audio_config.start_idx = i
+            audio_config.end_idx = min(i + self.segment_length, length)
 
-            idx = 0
-            for i in range(0, input_ids.shape[0], stride):
-                segment = input_ids[i:i+stride, :]
-                mask = attention_mask[i:i+stride]
+            # Make sure that a segment is at least 1 second long
+            if segment.shape[-1] < 16000:
+                logger.warning(f'File segment {file_name} is too short. Skipping')
+                continue
 
-                # Store audio configs start idx, end idx in seconds
-                audio_config.start_idx = idx
-                audio_config.end_idx = min(idx + self.segment_length, length)
-                idx += self.segment_length
+            if segment.shape[0] < self.segment_length:
+                padded_segment_len = self.segment_length - segment.shape[0]
 
-                if self.pad_token is None:
-                    yield segment, mask, deepcopy(audio_config)
-                    continue
+                attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=0)
+                segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
 
-                padded_len = stride - segment.shape[0]
-                segment = F.pad(segment, (0, 0, 0, padded_len), "constant", value=self.pad_token)
-                mask = F.pad(mask, (0, padded_len), "constant", value=0)
-
-                yield segment, mask, deepcopy(audio_config)
-
-        else:
-            for i in range(0, length, self.stride):
-                segment = waveform[0, i:i+self.segment_length]
-                attention_mask = torch.ones(segment.shape[0])
-                audio_config.start_idx = i
-                audio_config.end_idx = min(i + self.segment_length, length)
-
-                # Make sure that a segment is at least 1 second long
-                if segment.shape[-1] < 16000:
-                    logger.warning(f'File segment {file_name} is too short. Skipping')
-                    continue
-
-                if segment.shape[0] < self.segment_length:
-                    padded_segment_len = self.segment_length - segment.shape[0]
-
-                    attention_mask = F.pad(attention_mask, (0, padded_segment_len), value=0)
-                    segment = F.pad(segment, (0, padded_segment_len), value=self.pad_token)
-
-                yield segment, attention_mask, deepcopy(audio_config)
+            yield segment, attention_mask, deepcopy(audio_config)
 
     def __iter__(self):
         worker_info = get_worker_info()
@@ -214,6 +181,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for encoding.')
     parser.add_argument('--workers', type=int, default=4, help='Batch size for encoding.')
 
+    single_segment_duration = 10
+
     args = parser.parse_args()
     files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
     files = sorted(files)
@@ -221,14 +190,14 @@ if __name__ == '__main__':
     print('Found files:', len(files))
 
     if args.tokenizer == 'encodec':
-        from .configs import VoiceEncoderConfig
+        from .configs import AcousticEncoderConfig
 
         dataset = AudioBatchDataset(
             files,
-            sample_rate=VoiceEncoderConfig.model_sample_rate,
-            single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-            model_token_rate=VoiceEncoderConfig.model_token_rate,
-            pad_token=VoiceEncoderConfig.pad_token
+            sample_rate=AcousticEncoderConfig.model_sample_rate,
+            single_segment_duration=single_segment_duration,
+            model_token_rate=AcousticEncoderConfig.model_token_rate,
+            pad_token=AcousticEncoderConfig.pad_token
         )
 
     elif args.tokenizer == 'hubert':
@@ -254,7 +223,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            single_segment_duration=Wav2VecBertConfig.single_segment_duration,
+            single_segment_duration=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )

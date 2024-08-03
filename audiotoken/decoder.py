@@ -102,7 +102,7 @@ if __name__ == '__main__':
     from time import time
     from pathlib import Path
 
-    from .configs import VoiceDecoderConfig
+    from .configs import 
 
     device='cuda:0'
 
@@ -117,9 +117,9 @@ if __name__ == '__main__':
         tokens_n.put(temp[0])
 
     voice_decoder = VoiceDecoder(
-        bandwidth=VoiceDecoderConfig.bandwidth,
-        single_segment_duration=VoiceDecoderConfig.single_segment_duration,
-        overlap=VoiceDecoderConfig.overlap,
+        bandwidth=.bandwidth,
+        single_segment_duration=.single_segment_duration,
+        overlap=.overlap,
         device=device
     )
 
