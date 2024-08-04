@@ -7,12 +7,13 @@ from vector_quantize_pytorch import VectorQuantize
 
 from .utils import read_audio, load_vq_weights
 from .configs import HubertEncoderConfig, AudioConfig, AcousticEncoderConfig, Wav2VecBertConfig
-from .logger import logger
+from .logger import get_logger
 from .processors import Wav2VecBertProcessor
 
 from .modeling_wav2vec2_bert import forward as sdpa_forward
 Wav2Vec2BertSelfAttention.forward = sdpa_forward
 
+logger = get_logger(__name__)
 
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
@@ -257,10 +258,9 @@ if __name__ == '__main__':
 
         for p in tqdm(audio_file_paths):
             a = read_audio(Path(p).expanduser(), AcousticEncoderConfig.model_sample_rate)
-            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, length_tokens=50)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 24_000, model_token_rate=50)
 
             encoded = voice_encoder(a.to(device), torch.ones_like(a, device=device))
-            print(encoded.shape)
             save_audio_tokens(encoded, audio_config, args.outdir)
 
         print(f'Encodec encoding took {time() - start_time:.2f}s')
@@ -283,7 +283,7 @@ if __name__ == '__main__':
             a = hubert_processor(a, processor)
             am = torch.ones_like(a, device=device)
 
-            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, length_tokens=50)
+            audio_config = AudioConfig(file_name=p, length_seconds=a.shape[-1], length_samples=a.shape[-1] * 16_000, model_token_rate=50)
 
             encoded = hubert_encoder(a.to(device), am)
             save_audio_tokens(encoded.squeeze(0), audio_config, args.outdir)
@@ -308,7 +308,7 @@ if __name__ == '__main__':
                 file_name=p,
                 length_seconds=a.shape[-1]/16_000,
                 length_samples=a.shape[-1],
-                length_tokens=50
+                model_token_rate=50
             )
 
             encoded = wav2vec_encoder(a.to(device), am.to(device), pad_to_multiple_of=10*50)

@@ -1,4 +1,3 @@
-import torch
 from math import ceil
 from enum import Enum
 from typing import Optional
@@ -17,7 +16,15 @@ class TOKENIZERS(Enum):
 
 
 @dataclass
-class AcousticEncoderConfig:
+class EncoderConfig:
+    model_id: str # Model ID for the encoder
+    model_sample_rate: int # Sample rate of the audio file that the model expects
+    model_token_rate: int # Number of tokens produced by the model per second
+    pad_token: Optional[int] # Padding token for the model
+
+@dataclass
+class AcousticEncoderConfig(EncoderConfig):
+    model_id: str = 'encodec'
     model_sample_rate: int = 24_000
     bandwidth: float = 12
     model_token_rate: int = 75
@@ -28,7 +35,7 @@ class AcousticDecoderConfig(AcousticEncoderConfig):
     pass
 
 @dataclass
-class HubertEncoderConfig:
+class HubertEncoderConfig(EncoderConfig):
     # TODO: Update the model paths to huggingface paths
     # model_id: str = 'voidful/mhubert-base'
     model_id: str = 'data/model/trimmed/hubert_11/'
@@ -45,7 +52,7 @@ class HubertEncoderConfig:
     pad_token: Optional[int] = 0
 
 @dataclass
-class Wav2VecBertConfig:
+class Wav2VecBertConfig(EncoderConfig):
     model_id: str = 'facebook/w2v-bert-2.0'
     model_sample_rate: int = 16_000
     model_token_rate: int = 50
@@ -70,28 +77,28 @@ class AudioConfig:
 
     Args:
         - file_name: str: Path to the audio file
-        - start_idx: Optional[int]: Start index of the audio file in the batch
-        - end_idx: Optional[int]: End index of the audio file in the batch
-        - length_seconds: Optional[float]: Length of the audio file in seconds
-        - length_samples: Optional[int]: Length of the audio file in samples (according to the sample rate in which it is read)
-        - length_tokens: Optional[int]: Length of the audio file in tokens
+        - start_idx: Optional[int]: Start index of the audio in the complete file (in samples)
+        - end_idx: Optional[int]: End index of the audio in the complete file (in samples)
+        - length_seconds: Optional[float]: Length of the audio in seconds
+        - length_samples: Optional[int]: Length of the audio in samples
+        - model_token_rate: Optional[int]: Number of tokens produced by the model per second
 
     Properties:
-        - tokens_len: int: Length of the audio file in tokens after the audio is tokenized
+        - length_tokens: int: Length of the audio file in tokens after the audio is tokenized
     """
     file_name: str
     start_idx: Optional[int] = None
     end_idx: Optional[int] = None
     length_seconds: Optional[float] = None
     length_samples: Optional[int] = None
-    length_tokens: Optional[int] = None
+    model_token_rate: Optional[int] = None
 
     @property
-    def tokens_len(self) -> int:
-        if self.length_tokens is None or self.length_seconds is None:
-            raise ValueError("Length of tokens not set")
+    def length_tokens(self) -> int:
+        if self.model_token_rate is None or self.length_seconds is None:
+            raise ValueError("Model token rate or length of the audio file is not provided")
 
-        return ceil(self.length_seconds * self.length_tokens) # type: ignore
+        return ceil(self.length_seconds * self.model_token_rate) # type: ignore
 
 @dataclass
 class KMeansClusterConfig:

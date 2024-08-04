@@ -9,10 +9,10 @@ from queue import Queue
 from matplotlib import pyplot as plt
 from torchmetrics.audio import ScaleInvariantSignalNoiseRatio
 
-from src.encoder import VoiceEncoder
-from src.decoder import VoiceDecoder
-from src.utils import read_audio
-from src.configs import AcousticEncoderConfig, 
+from .encoder import VoiceEncoder
+from .decoder import VoiceDecoder
+from .utils import read_audio
+from .configs import AcousticEncoderConfig, 
 
 if __name__ == '__main__':
 

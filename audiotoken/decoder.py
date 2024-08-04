@@ -4,7 +4,9 @@ from typing import List
 from queue import Queue
 from encodec import EncodecModel
 
-from src.logger import logger
+from .logger import get_logger
+
+logger = get_logger(__name__)
 
 class TextDecoder:
     """
@@ -25,7 +27,7 @@ class VoiceDecoder:
     """
     Wrapper over Encodec model to decode a list of audio files
 
-    >>> from src.decoder import VoiceDecoder
+    >>> from .decoder import VoiceDecoder
     >>> voice_decoder = VoiceDecoder(
     >>>    bandwidth=6.0,
     >>>    single_segment_duration=2,
@@ -95,55 +97,3 @@ class VoiceDecoder:
                 if self.cutoff > 0:
                     out = out[:, :, :-self.cutoff]
                 yield out.reshape(-1, )
-
-
-if __name__ == '__main__':
-    import pdb
-    from time import time
-    from pathlib import Path
-
-    from .configs import 
-
-    device='cuda:0'
-
-    tokens_file_paths: List[str] = ['./data/tokens_0.pt']
-    tokens: Queue[torch.Tensor] = Queue()
-    tokens_n: Queue[torch.Tensor] = Queue()
-
-    for p in tokens_file_paths:
-        temp = torch.load(Path(p).expanduser())
-        print(p, temp[0].shape)
-        tokens.put(temp[0])
-        tokens_n.put(temp[0])
-
-    voice_decoder = VoiceDecoder(
-        bandwidth=.bandwidth,
-        single_segment_duration=.single_segment_duration,
-        overlap=.overlap,
-        device=device
-    )
-
-    start_time = time()
-    decoded_audio = voice_decoder(
-        read_q=tokens
-    )
-
-    result = []
-    for idx, batch in enumerate(decoded_audio):
-        print(idx, batch.shape)
-        result.append(batch)
-
-    print(f'Decoding took {time() - start_time:.2f}s')
-
-    # start_time = time()
-
-    # batches = []
-    # while not tokens_n.empty():
-    #     batch = tokens_n.get()
-    #     batches.append(batch)
-
-    # batches = torch.cat(batches)
-    # op = voice_decoder.model.decode(batches)
-    # pdb.set_trace()
-
-    # logger.info(f'Decoding took {time() - start_time:.2f}s')

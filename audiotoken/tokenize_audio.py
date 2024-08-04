@@ -5,12 +5,13 @@ from tqdm import tqdm
 from functools import partial
 from pathlib import Path
 from torch.utils.data import DataLoader
-from loguru import logger
 
 from .utils import save_audio_tokens, find_files, set_process_affinity
 from .datasets import AudioBatchDataset, collate_fn
-from .logger import logger
+from .logger import get_logger
 from .configs import AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
+
+logger = get_logger(__name__)
 
 @torch.inference_mode()
 def encode(voice_encoder, dataset, batch_size, outdir):
@@ -93,7 +94,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=AcousticEncoderConfig.model_sample_rate,
-            single_segment_duration=single_segment_duration,
+            chunk_size=single_segment_duration,
             model_token_rate=AcousticEncoderConfig.model_token_rate,
             pad_token=AcousticEncoderConfig.pad_token
         )
@@ -112,7 +113,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=HubertEncoderConfig.model_sample_rate,
-            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            chunk_size=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,
             model_token_rate=HubertEncoderConfig.model_token_rate,
             pad_token=HubertEncoderConfig.pad_token
@@ -130,7 +131,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            single_segment_duration=single_segment_duration,
+            chunk_size=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )

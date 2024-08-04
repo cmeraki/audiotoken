@@ -2,7 +2,7 @@ import pdb
 import torch
 
 from transformers import SeamlessM4TFeatureExtractor
-from src.configs import Wav2VecBertConfig
+from .configs import Wav2VecBertConfig
 from .optim_impl import OptimizedSeamlessM4TFeatureExtractor
 from .faster_impl import W2VBert2Processor
 
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     import numpy as np
     from tqdm import tqdm
 
-    from src.utils import read_audio, find_audio_files
+    from .utils import read_audio, find_audio_files
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--indir', type=str, default='data/test-clean/LibriSpeech/test-clean/1089')

@@ -5,9 +5,9 @@ from queue import Queue
 
 from encodec.utils import save_audio
 
-from src.decoder import VoiceDecoder
-from src.configs import 
-from src.utils import find_files
+from .decoder import VoiceDecoder
+from .configs import 
+from .utils import find_files
 
 if __name__ == '__main__':
     """

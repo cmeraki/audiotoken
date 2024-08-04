@@ -316,7 +316,7 @@ class OptimizedSeamlessM4TFeatureExtractor():
 
 
 import torch
-from src.utils import read_audio
+from .utils import read_audio
 
 def optim_impl(a):
     a = a.numpy()

@@ -1,53 +1,40 @@
 import os
 import sys
-import json
-from loguru import logger
+import logging
+from typing import Optional
+from logging.handlers import RotatingFileHandler
 
+def get_logger(name:str, log_file:Optional[str] = "app.log", level:str = "ERROR"):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
 
-def serialize_log(record):
-    subset = {
-        "timestamp": record["time"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-        "level": record["level"].name,
-        "message": record["message"],
-        "thread_id": record["thread"].id,
-        "process_id": record["process"].id
-    }
-    # You can add more fields here if needed
-    return subset
+    # Remove all handlers associated with the logger object
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
 
-def get_logger(log_file="app.log", level: str = "ERROR"):
-
-    logger.remove()
-
-    format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {process.name} | {thread.id} | {level: <8} | {file}:{line} | {message}"
+    formatter = logging.Formatter('%(asctime)s | %(processName)s | %(thread)d | %(levelname)-8s | %(filename)s:%(lineno)d | %(message)s')
+    formatter.datefmt = '%Y-%m-%d %H:%M:%S.%f'
 
     if log_file:
         os.makedirs("logs", exist_ok=True)
         log_file = os.path.join("logs", log_file)
+        file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
-        logger.add(
-            log_file,
-            format=format,
-            rotation="10 MB",
-            retention="1 week",
-            level="INFO",
-            enqueue=True,
-        )
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(getattr(logging, level))
+    console_handler.setFormatter(formatter)
 
-    logger.add(
-        sys.stderr,
-        format=format,
-        level=level,
-    )
+    logger.addHandler(console_handler)
 
     return logger
 
-
-get_logger(log_file="app.log")
-
 # Usage example
 if __name__ == "__main__":
-    get_logger()
+    logger = get_logger(__name__, log_file=None, level="DEBUG")
+
     logger.info("This is an info message")
     logger.warning("This is a warning message")
     logger.error("This is an error message")

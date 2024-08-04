@@ -9,8 +9,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from .configs import AudioConfig, AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
 from .utils import read_audio, iterate_tar, iterate_zip
-from .logger import logger
+from .logger import get_logger
 
+logger = get_logger(__name__)
 
 def collate_fn(batch):
     segments, attention_masks, file_names = zip(*batch)
@@ -22,11 +23,10 @@ class AudioBatchDataset(IterableDataset):
             self,
             audio_files: List[str],
             sample_rate: int,
-            single_segment_duration: int,
             model_token_rate: int,
+            chunk_size: int,
             transform=None,
             pad_token: Optional[int] = 0,
-            overlap: float = 0
         ):
 
         # From: https://github.com/pytorch/pytorch/issues/13246#issuecomment-715050814
@@ -35,19 +35,14 @@ class AudioBatchDataset(IterableDataset):
         # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
         self.audio_files = np.array(audio_files).astype(np.string_)
 
-        # self.audio_files = audio_files
-
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
         self.transform = transform
         self.pad_token = pad_token
 
-        self.single_segment_duration = single_segment_duration
-        self.segment_length = single_segment_duration*sample_rate
-        self.stride = int(self.segment_length - overlap * sample_rate)
-
-        # TODO: Implement overlap
-        assert self.stride == self.segment_length, "Overlap not supported yet"
+        self.chunk_size = chunk_size
+        self.segment_length = chunk_size*sample_rate
+        self.stride = int(self.segment_length)
 
         """
         self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
@@ -85,7 +80,7 @@ class AudioBatchDataset(IterableDataset):
             file_name=file_name,
             length_seconds=length/ self.sample_rate,
             length_samples=length,
-            length_tokens=self.model_token_rate
+            model_token_rate=self.model_token_rate
         )
 
         for i in range(0, length, self.stride):
@@ -136,7 +131,7 @@ class AudioBatchDataset(IterableDataset):
                 # self.pbar.refresh()
 
             elif file_path.endswith(TAR_EXTS):
-                for waveform, file_name in iterate_tar(file_path, self.sample_rate):
+                for waveform, file_name in iterate_tar(file_path, self.sample_rate, self.chunk_size):
                     yield from self._iter_chunk(waveform, file_name)
 
                     # self.files_processed += 1
@@ -144,7 +139,7 @@ class AudioBatchDataset(IterableDataset):
                     # self.pbar.refresh()
 
             elif file_path.endswith(ZIP_EXTS):
-                for waveform, file_name in iterate_zip(file_path, self.sample_rate):
+                for waveform, file_name in iterate_zip(file_path, self.sample_rate, self.chunk_size):
                     yield from self._iter_chunk(waveform, file_name)
 
                     # self.files_processed += 1
@@ -195,7 +190,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=AcousticEncoderConfig.model_sample_rate,
-            single_segment_duration=single_segment_duration,
+            chunk_size=single_segment_duration,
             model_token_rate=AcousticEncoderConfig.model_token_rate,
             pad_token=AcousticEncoderConfig.pad_token
         )
@@ -211,7 +206,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=HubertEncoderConfig.model_sample_rate,
-            single_segment_duration=HubertEncoderConfig.single_segment_duration,
+            chunk_size=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,
             model_token_rate=HubertEncoderConfig.model_token_rate,
             pad_token=HubertEncoderConfig.pad_token
@@ -223,7 +218,7 @@ if __name__ == '__main__':
         dataset = AudioBatchDataset(
             files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
-            single_segment_duration=single_segment_duration,
+            chunk_size=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
             pad_token=Wav2VecBertConfig.pad_token
         )

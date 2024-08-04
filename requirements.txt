@@ -4,11 +4,7 @@ torchaudio==2.3.1
 transformers==4.41.2
 encodec==0.1.1
 typing
-loguru==0.7.2
 datasets==2.20.0
-soundfile==0.12.1
-librosa==0.10.2.post1
-scikit-learn==1.5.0
 tqdm==4.66.4
 psutil==5.9.8
 vector-quantize-pytorch==1.15.3

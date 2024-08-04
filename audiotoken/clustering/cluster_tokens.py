@@ -12,7 +12,7 @@ import torch
 from functools import partial
 
 from torch.utils.data import DataLoader
-from sklearn.cluster import MiniBatchKMeans
+# from sklearn.cluster import MiniBatchKMeans
 from vector_quantize_pytorch import VectorQuantize
 
 from ..logger import get_logger
