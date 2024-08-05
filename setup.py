@@ -6,7 +6,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="audiotoken",
-    version="0.1.0",
+    version="0.1.1",
     packages=find_packages(),
     description="A package for creating audio tokens",
     long_description=open("README.md").read(),
