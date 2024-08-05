@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Optional
 from dataclasses import dataclass
 
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 
 AUDIO_EXTS = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
 TAR_EXTS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz')
@@ -53,11 +53,27 @@ class HubertEncoderConfig(EncoderConfig):
 
 @dataclass
 class Wav2VecBertConfig(EncoderConfig):
-    model_id: str = 'facebook/w2v-bert-2.0'
+    model_id: str = hf_hub_download(
+        repo_id='cmeraki/w2vbert2_L19',
+        repo_type='model',
+        revision='c5fc4e6c2db24eec909ec678fe2b8debcc59ffed',
+        filename='model.safetensors'
+    ).replace('model.safetensors', '')
+    model_hf_config: str = hf_hub_download(
+        repo_id='cmeraki/w2vbert2_L19',
+        repo_type='model',
+        revision='c5fc4e6c2db24eec909ec678fe2b8debcc59ffed',
+        filename='config.json'
+    )
     model_sample_rate: int = 16_000
     model_token_rate: int = 50
     output_layer: int = 19
-    quantizer_path: Optional[str] = 'data/vq_w2vbert_mix_run2/quantizer__L19_C2048_ckpt9000.pkl'
+    quantizer_path: Optional[str] = hf_hub_download(
+        repo_id='cmeraki/w2vbert2_vq_quantizer',
+        repo_type='model',
+        revision='dcaa88d656395c0a8eaf61350d2f358cff3328ee',
+        filename='quantizer__L19_C2048_ckpt9000.pkl'
+    )
     pad_token: Optional[int] = 0
 
 @dataclass
