@@ -161,6 +161,8 @@ class AudioToken:
         else:
             outdir = sanitize_path(outdir)
 
+        num_workers = min(num_workers, len(audio_files))
+
         logger.info(f"Encoding {len(audio_files)} audio files with {num_workers} workers")
 
         dataset = AudioBatchDataset(
