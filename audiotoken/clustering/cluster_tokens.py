@@ -150,13 +150,15 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     )
     vq.to(DEVICE) # type:ignore
 
-    # new_state_dict = {}
-    # old_vq = torch.load('data/vq_w2vbert2_60k_run1/quantizer__L19_C2048_ckpt62500.pkl', map_location=DEVICE)
+    new_state_dict = {}
+    old_vq = torch.load('data/vq_w2vbert_mix_2/quantizer__L19_C2048_ckpt9000.pkl', map_location=DEVICE)
 
-    # for k, v in old_vq.items():
-    #     new_state_dict[k] = v
+    for k, v in old_vq.items():
+        new_state_dict[k] = v
 
-    # vq.load_state_dict(new_state_dict) # type:ignore
+    vq.load_state_dict(new_state_dict) # type:ignore
+
+    print('Loaded the checkpoint')
 
     # vq = torch.compile(vq)
     # vq(torch.randn((batch_size, EMBEDDING_DIM), device=DEVICE))
@@ -206,16 +208,17 @@ def main(args):
     files = find_files(args.indir, AUDIO_EXTS + TAR_EXTS + ZIP_EXTS)
     # files = sorted(files)
     random.shuffle(files)
+    files.remove('/home/meraki/projects/indri/data/audio/gigaspeech/podcast_tar/P0091_part1.tar')
     print(f'Found {len(files)} files')
 
-    # with open('./logs/processed.txt', 'r') as fp:
-    #     d = fp.read()
-    #     processed_files = []
-    #     for ln in d.split('\n'):
-    #         processed_files.append(ln)
+    with open('./logs/processed_mix.txt', 'r') as fp:
+         d = fp.read()
+         processed_files = []
+         for ln in d.split('\n'):
+             processed_files.append(ln)
 
-    # files = [f for f in files if f not in processed_files]
-    # print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
+    files = [f for f in files if f not in processed_files]
+    print(f'Found: {len(files)} files after excluding {len(processed_files)} files')
 
     out_kmeans_model_path = args.outdir
     os.makedirs(out_kmeans_model_path, exist_ok=True)

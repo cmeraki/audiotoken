@@ -121,6 +121,7 @@ class AudioBatchDataset(IterableDataset):
         for idx in range(iter_start, iter_end):
 
             file_path = str(self.audio_files[idx], encoding='utf-8')
+            logger.info(f'Worker {worker_id} is processing {file_path}')
 
             if file_path.endswith(AUDIO_EXTS):
                 waveform = read_audio(file_path, self.sample_rate)
