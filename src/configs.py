@@ -46,7 +46,7 @@ class Wav2VecBertConfig:
     single_segment_duration: int = 10
     model_token_rate: int = 50
     output_layer: int = 19
-    quantizer_path: Optional[str] = 'data/vq_w2vbert2_60k_run1/quantizer__L19_C2048_ckpt62500.pkl'
+    quantizer_path: Optional[str] = 'data/vq_w2vbert_mix_run2/quantizer__L19_C2048_ckpt9000.pkl'
     pad_token: Optional[int] = 0
 
 @dataclass

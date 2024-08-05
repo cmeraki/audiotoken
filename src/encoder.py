@@ -276,7 +276,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
                     logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
 
                     _, clusters, _ = self.vq(embeddings) # (B, T, 1)
-                    clusters = clusters.transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
+                    clusters = clusters.unsqueeze(-1).transpose(1, 2).to(dtype=torch.int16).detach()  # B, 1, T
                     logger.info(f'Clusters size: {clusters.shape}')
 
                     return clusters
