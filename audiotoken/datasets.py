@@ -8,7 +8,7 @@ from copy import deepcopy
 from torch.utils.data import IterableDataset, get_worker_info
 
 from .configs import AudioConfig, AUDIO_EXTS, TAR_EXTS, ZIP_EXTS
-from .utils import read_audio, iterate_tar, iterate_zip
+from .utils import read_audio, iterate_tar, iterate_zip, process_audio_chunks
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,31 +44,8 @@ class AudioBatchDataset(IterableDataset):
         self.segment_length = chunk_size*sample_rate
         self.stride = int(self.segment_length)
 
-        """
         self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
         self.files_processed = torch.zeros(1, dtype=torch.long).share_memory_()
-
-        # TODO: There needs to a better approach to handle tar files
-        self.pbar.total = 0
-
-        for f in audio_files:
-            if f.endswith(TAR_EXTS):
-                with tarfile.open(f, 'r') as tar:
-                    total_files = len(tar.getnames())
-                    logger.info(f"Found {total_files} files in {f}")
-
-                    self.pbar.total += total_files
-
-            elif f.endswith(AUDIO_EXTS):
-                self.pbar.total += 1
-
-            elif f.endswith(ZIP_EXTS):
-                with zipfile.ZipFile(f, 'r') as z:
-                    total_files = len(z.namelist())
-                    logger.info(f"Found {total_files} files in {f}")
-
-                    self.pbar.total += total_files
-        """
 
     def _iter_chunk(self, waveform: torch.Tensor, file_name: str):
         length = waveform.shape[-1]
@@ -89,9 +66,9 @@ class AudioBatchDataset(IterableDataset):
             audio_config.start_idx = i
             audio_config.end_idx = min(i + self.segment_length, length)
 
-            # Make sure that a segment is at least 1 second long
-            if segment.shape[-1] < 16000:
-                logger.warning(f'File segment {file_name} is too short. Skipping')
+            # Make sure that a segment is at least 0.2 second long
+            if segment.shape[-1] < 3200:
+                logger.warning(f'File segment {i//self.sample_rate} of {file_name} is too short. Skipping')
                 continue
 
             if segment.shape[0] < self.segment_length:
@@ -124,41 +101,31 @@ class AudioBatchDataset(IterableDataset):
             logger.info(f'Worker {worker_id} is processing {file_path}')
 
             if file_path.endswith(AUDIO_EXTS):
-                waveform = read_audio(file_path, self.sample_rate)
-                yield from self._iter_chunk(waveform, file_path)
-
-                # self.files_processed += 1
-                # self.pbar.n = self.files_processed.item()
-                # self.pbar.refresh()
+                with open(file_path, "rb") as file_stream:
+                    for waveform, file_name in process_audio_chunks(
+                        file_path, file_stream, self.sample_rate, self.chunk_size
+                    ):
+                        yield from self._iter_chunk(waveform, file_name)
 
             elif file_path.endswith(TAR_EXTS):
                 for waveform, file_name in iterate_tar(file_path, self.sample_rate, self.chunk_size):
                     yield from self._iter_chunk(waveform, file_name)
 
-                    # self.files_processed += 1
-                    # self.pbar.n = self.files_processed.item()
-                    # self.pbar.refresh()
-
             elif file_path.endswith(ZIP_EXTS):
                 for waveform, file_name in iterate_zip(file_path, self.sample_rate, self.chunk_size):
                     yield from self._iter_chunk(waveform, file_name)
 
-                    # self.files_processed += 1
-                    # self.pbar.n = self.files_processed.item()
-                    # self.pbar.refresh()
-
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-            # with open('logs/processed_mix.txt', 'a') as fp:
-            #     fp.write(file_path)
-            #     fp.write('\n')
+            self.files_processed += 1
+            self.pbar.n = self.files_processed.item()
+            self.pbar.refresh()
 
             logger.info(f"Processed complete file at {file_path}")
 
     def __del__(self):
-        pass
-        # self.pbar.close()
+        self.pbar.close()
 
 if __name__ == '__main__':
     import pdb

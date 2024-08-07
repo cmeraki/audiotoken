@@ -1,6 +1,7 @@
 import os
 import torch
 import time
+import psutil
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -78,7 +79,7 @@ class AudioToken:
 
     def encode(
             self,
-            audio: Union[np.ndarray, os.PathLike, bytes, Path],
+            audio: Union[torch.Tensor, np.ndarray, os.PathLike, bytes, Path],
             chunk_size: Optional[int] = None
         ) -> np.ndarray:
         """
@@ -108,6 +109,9 @@ class AudioToken:
         if isinstance(audio, np.ndarray):
             return self._encode_single(torch.from_numpy(audio))
 
+        elif isinstance(audio, torch.Tensor):
+            return self._encode_single(audio)
+
         elif isinstance(audio, os.PathLike) or isinstance(audio, Path):
             if chunk_size is None:
                 logger.debug(f"Encoding single audio file: {audio} with no chunking")
@@ -122,7 +126,7 @@ class AudioToken:
 
                 with open(audio, "rb") as file_stream:
                     processed_chunks = [self._encode_single(chunk)[0] for chunk, _ in process_audio_chunks(
-                        audio, file_stream, chunk_size, self.model_config.model_sample_rate)]
+                        audio, file_stream, self.model_config.model_sample_rate, chunk_size)]
 
                 return np.concatenate(processed_chunks, axis=-1).reshape(1, 16, -1)
 
@@ -144,24 +148,16 @@ class AudioToken:
             self,
             audio_files: List[os.PathLike],
             batch_size: int,
+            outdir: os.PathLike,
             chunk_size: int = 30,
             num_workers: int = 12,
-            outdir: Optional[os.PathLike] = None,
             **dataloader_kwargs
         ):
 
-        if outdir is None:
-            # TODO: Support return without saving to disk
-            logger.error(
-                f"Output directory not provided. The encoded files will not be saved to the disk, rather kept in memory."
-                "This may run out of memory for large audio files."
-                "Consider providing an output directory to save the encoded audio directly to the disk."
-            )
-            raise NotImplementedError("Output directory not provided. Current implementation saves to audio files")
-        else:
-            outdir = sanitize_path(outdir)
+        outdir = sanitize_path(outdir)
 
-        num_workers = min(num_workers, len(audio_files))
+        num_logical_cores = psutil.cpu_count(logical=True)
+        num_workers = min(num_workers, len(audio_files), num_logical_cores)
 
         logger.info(f"Encoding {len(audio_files)} audio files with {num_workers} workers")
 

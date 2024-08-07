@@ -37,8 +37,8 @@ def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
 def process_audio_chunks(
     file_name,
     file_stream,
-    chunk_size,
-    target_sample_rate
+    target_sample_rate,
+    chunk_size
 ):
     streamer = StreamReader(file_stream)
     # metadata = streamer.get_src_stream_info(0)
