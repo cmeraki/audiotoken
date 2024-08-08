@@ -107,7 +107,7 @@ class AudioBatchDataset(IterableDataset):
     def __iter__(self):
         worker_info = get_worker_info()
         worker_id = worker_info.id if worker_info is not None else 0
-        logger.info(f"Starting worker {worker_info.id}")
+        logger.info(f"Starting worker {worker_id}")
 
         while self.audio_q.qsize() > 0:
             file_path = self.audio_q.get()
