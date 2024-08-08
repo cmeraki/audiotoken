@@ -320,3 +320,34 @@ def collate_audio_tokens(prev_tokens: np.ndarray, new_tokens: torch.Tensor, audi
     tokens = tokens[:, :length_tokens]
 
     return tokens
+
+
+def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir: str, rel_dir: str):
+
+    try:
+        tokens = tokens.cpu().numpy()
+        length_tokens = audio_pointer.length_tokens  # type: ignore
+
+        rel_path = os.path.relpath(audio_pointer.file_name, start=rel_dir)
+        rel_path = os.path.dirname(rel_path)
+        output_path = os.path.join(root_dir, rel_path)
+
+        os.makedirs(output_path, exist_ok=True)
+
+        filename = os.path.splitext(os.path.basename(audio_pointer.file_name))[0]
+        save_path = os.path.join(output_path, f'{filename}.npy')
+
+        logger.debug(f'Saving file: {filename} with shape: {length_tokens} to {save_path}')
+
+        if os.path.exists(save_path):
+            prev_tokens = np.load(save_path)
+            prev_tokens = np.hstack([prev_tokens, tokens])
+            np.save(save_path, prev_tokens[:, :length_tokens])
+
+        else:
+            np.save(save_path, tokens[:, :length_tokens])
+
+        logger.debug(f"Saved tokens for {filename} to {save_path}")
+
+    except Exception as e:
+        logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')

@@ -1,5 +1,6 @@
+import glob
 import torch
-import math
+import itertools
 import numpy as np
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -21,19 +22,32 @@ def collate_fn(batch):
 class AudioBatchDataset(IterableDataset):
     def __init__(
             self,
-            audio_files: List[str],
             sample_rate: int,
             model_token_rate: int,
             chunk_size: int,
             transform=None,
             pad_token: Optional[int] = 0,
+            audio_files: Optional[List[str]] = None,
+            audio_dir: Optional[str] = None,
+            exts: tuple = AUDIO_EXTS + TAR_EXTS + ZIP_EXTS
         ):
 
-        # From: https://github.com/pytorch/pytorch/issues/13246#issuecomment-715050814
-        # If the list of audio files is Python list, the memory usage is very high when using multiple workers
-        # It is better to convert the list to numpy array
-        # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
-        self.audio_files = np.array(audio_files).astype(np.string_)
+        assert audio_files or audio_dir, "Either audio_files or audio_dir must be provided"
+
+        self.decode_path = False
+        if audio_files:
+            # From: https://github.com/pytorch/pytorch/issues/13246#issuecomment-715050814
+            # If the list of audio files is Python list, the memory usage is very high when using multiple workers
+            # It is better to convert the list to numpy array
+            # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
+            np_audio_files = np.array(audio_files).astype(np.string_)
+            self.audio_files = np.nditer(np_audio_files)
+            self.decode_path = True
+
+        elif audio_dir:
+            self.audio_files = itertools.chain.from_iterable(
+                glob.iglob(f"{audio_dir}/**/*{ext}", recursive=True) for ext in exts
+            ) # type: ignore
 
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
@@ -43,9 +57,6 @@ class AudioBatchDataset(IterableDataset):
         self.chunk_size = chunk_size
         self.segment_length = chunk_size*sample_rate
         self.stride = int(self.segment_length)
-
-        self.pbar = tqdm(total=len(self.audio_files), desc="Processing audio files", position=-1, leave=True)
-        self.files_processed = torch.zeros(1, dtype=torch.long).share_memory_()
 
     def _iter_chunk(self, waveform: torch.Tensor, file_name: str):
         length = waveform.shape[-1]
@@ -81,23 +92,11 @@ class AudioBatchDataset(IterableDataset):
 
     def __iter__(self):
         worker_info = get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        logger.info(f"Starting worker {worker_info.id}")
 
-        iter_start = 0
-        iter_end = len(self.audio_files)
-
-        if worker_info is not None:
-            per_worker = int(
-                math.ceil(len(self.audio_files) / float(worker_info.num_workers))
-            )
-            worker_id = worker_info.id
-            iter_start = worker_id * per_worker
-            iter_end = min(iter_start + per_worker, len(self.audio_files))
-
-            logger.info(f"Worker {worker_id} processing files {iter_start} to {iter_end}")
-
-        for idx in range(iter_start, iter_end):
-
-            file_path = str(self.audio_files[idx], encoding='utf-8')
+        for file_path in self.audio_files:
+            file_path = str(file_path, encoding='utf-8') if self.decode_path else file_path
             logger.info(f'Worker {worker_id} is processing {file_path}')
 
             if file_path.endswith(AUDIO_EXTS):
@@ -118,14 +117,10 @@ class AudioBatchDataset(IterableDataset):
             else:
                 logger.error(f"File {file_path} not supported for processing. Only {AUDIO_EXTS + TAR_EXTS + ZIP_EXTS} supported")
 
-            self.files_processed += 1
-            self.pbar.n = self.files_processed.item()
-            self.pbar.refresh()
-
             logger.info(f"Processed complete file at {file_path}")
 
     def __del__(self):
-        self.pbar.close()
+        pass
 
 if __name__ == '__main__':
     import pdb
@@ -156,7 +151,7 @@ if __name__ == '__main__':
         from .configs import AcousticEncoderConfig
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=AcousticEncoderConfig.model_sample_rate,
             chunk_size=single_segment_duration,
             model_token_rate=AcousticEncoderConfig.model_token_rate,
@@ -172,9 +167,9 @@ if __name__ == '__main__':
         tranform_func = partial(hubert_processor, processor=processor)
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=HubertEncoderConfig.model_sample_rate,
-            chunk_size=HubertEncoderConfig.single_segment_duration,
+            chunk_size=single_segment_duration,
             transform=tranform_func,
             model_token_rate=HubertEncoderConfig.model_token_rate,
             pad_token=HubertEncoderConfig.pad_token
@@ -184,7 +179,7 @@ if __name__ == '__main__':
         from .configs import Wav2VecBertConfig
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             chunk_size=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,

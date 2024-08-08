@@ -1,4 +1,5 @@
 import torch
+import joblib
 from pathlib import Path
 from encodec import EncodecModel
 from transformers import HubertModel, Wav2Vec2BertModel
@@ -61,15 +62,14 @@ class AcousticEncoder(torch.nn.Module):
                 return codes.detach()
 
 
-class HubertEncoder:
+class HubertEncoder(torch.nn.Module):
     def __init__(
         self,
         config: HubertEncoderConfig=HubertEncoderConfig(),
-        quantize: bool = True,
         device: str = 'cpu',
-        compile: bool = True,
-        batch_size: int = 1
+        quantize: bool = True,
     ):
+        super().__init__()
 
         self.quantize = quantize
         self.output_layer = config.output_layer
@@ -83,41 +83,11 @@ class HubertEncoder:
             bias=False,
             device=device,
         )
+        self.layer_norm.eval()
 
         if self.quantize:
-            vq = VectorQuantize(
-                dim=768,
-                codebook_size=2048,
-                decay=0.8,
-                commitment_weight=1
-            )
-            vq.to(device) # type: ignore
-            vq.eval()
-
-            model_weights = torch.load(config.quantizer_path, map_location=device)
-
-            vq = load_vq_weights(
-                model_weights=model_weights,
-                model=vq,
-            )
-
-            self.C = vq._codebook.embed
-
-            del (vq)
-
-        if compile:
-            self.model = torch.compile(self.model)
-
-            # warmup the model
-            input = torch.randn((batch_size, 160000), device=device)
-            am = torch.ones((batch_size, 160000), device=device)
-
-            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-                with torch.inference_mode():
-                    _ = self.model(input, attention_mask=am, output_hidden_states=True).hidden_states
-
-            del(input)
-            del(am)
+            km = joblib.load(config.quantizer_path)
+            self.C = torch.from_numpy(km.cluster_centers_).to(device)
 
     def __call__(self, input_batch: torch.Tensor, attention_mask: torch.Tensor):
         with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -130,6 +100,7 @@ class HubertEncoder:
                     embeddings = embeddings[self.output_layer]  # B, T, D
                     embeddings = self.layer_norm(embeddings)
                     logger.info(f'Embeddings size: {embeddings.shape}, dtype: {embeddings.dtype}')
+
                     # Compute L2 norm
                     distances = torch.cdist(embeddings, self.C)  # (B, T, K)
                     min_dist = torch.argmin(distances, dim=-1, keepdim=True)  # (B, T, 1)
@@ -151,7 +122,6 @@ class Wav2VecBertEncoder(torch.nn.Module):
     ):
 
         super().__init__()
-        model_id = config.model_id
 
         # Defaults from huggingface
         self.processor = Wav2VecBertProcessor(
@@ -164,11 +134,10 @@ class Wav2VecBertEncoder(torch.nn.Module):
 
         self.output_layer = config.output_layer
 
-        self.model = Wav2Vec2BertModel.from_pretrained(model_id)
+        self.model = Wav2Vec2BertModel.from_pretrained(config.model_id)
         self.quantize = quantize
 
         self.model.to(device)
-
         self.model.eval()
 
         self.layer_norm = torch.nn.LayerNorm(
@@ -177,6 +146,7 @@ class Wav2VecBertEncoder(torch.nn.Module):
             bias=False,
             device=device,
         )
+        self.layer_norm.eval()
 
         if self.quantize:
             self.vq = VectorQuantize(
@@ -271,9 +241,8 @@ if __name__ == '__main__':
         from transformers import Wav2Vec2FeatureExtractor
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
         hubert_encoder = HubertEncoder(
-            config=HubertEncoderConfig(),
-            device=device,
-            compile=False
+            quantize=True,
+            device=device
         )
 
         start_time = time()

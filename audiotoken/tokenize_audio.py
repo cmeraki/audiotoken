@@ -92,7 +92,7 @@ if __name__ == '__main__':
         encoder = AcousticEncoder(device=DEVICE)
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=AcousticEncoderConfig.model_sample_rate,
             chunk_size=single_segment_duration,
             model_token_rate=AcousticEncoderConfig.model_token_rate,
@@ -104,16 +104,16 @@ if __name__ == '__main__':
         from .encoder import HubertEncoder, hubert_processor
         from .configs import HubertEncoderConfig
 
-        encoder = HubertEncoder(device=DEVICE, batch_size=args.batch_size) # type: ignore
+        encoder = HubertEncoder(device=DEVICE) # type: ignore
 
         processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
 
         tranform_func = partial(hubert_processor, processor=processor)
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=HubertEncoderConfig.model_sample_rate,
-            chunk_size=HubertEncoderConfig.single_segment_duration,
+            chunk_size=single_segment_duration,
             transform=tranform_func,
             model_token_rate=HubertEncoderConfig.model_token_rate,
             pad_token=HubertEncoderConfig.pad_token
@@ -129,7 +129,7 @@ if __name__ == '__main__':
         )
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             chunk_size=single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,

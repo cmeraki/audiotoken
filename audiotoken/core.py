@@ -3,27 +3,29 @@ import torch
 import time
 import psutil
 import numpy as np
-from pathlib import Path
 from tqdm import tqdm
-from typing import List, Union, Optional
+from pathlib import Path
+from functools import partial
+from typing import List, Union, Optional, Callable
 from torch.utils.data import DataLoader
 
 from .logger import get_logger
-from .configs import TOKENIZERS, EncoderConfig
+from .configs import Tokenizers, EncoderConfig, AUDIO_EXTS
 from .datasets import AudioBatchDataset, collate_fn
 from .utils import (
     read_audio,
     process_audio_chunks,
     save_audio_tokens,
-    sanitize_path
+    sanitize_path,
+    save_rel_audio_tokens
 )
 
-logger = get_logger(__name__, log_file=None, level="DEBUG")
+logger = get_logger(__name__, log_file=None, level="WARNING")
 
 class AudioToken:
     def __init__(
             self,
-            tokenizer: TOKENIZERS,
+            tokenizer: Tokenizers,
             device: str = "cpu",
             compile: bool = False,
             **kwargs
@@ -44,29 +46,42 @@ class AudioToken:
 
         Usage:
             ```python
-            from audiotoken import AudioToken
-            encoder = AudioToken(tokenizer='ACOUSTIC', device='cuda:0')
+            from audiotoken import AudioToken, Tokenizers
+            encoder = AudioToken(tokenizer=Tokenizers.semantic_m, device='cuda:0')
             ```
         """
+        tokenizer_name = Tokenizers(tokenizer)
 
         self.tokenizer: torch.nn.Module
         self.model_config: EncoderConfig
+        self.tranform_func: Optional[Callable] = None
 
         self.device = device
 
-        if tokenizer == TOKENIZERS.ACOUSTIC.value:
+        if tokenizer_name == Tokenizers.acoustic:
             from .encoder import AcousticEncoder
             from .configs import AcousticEncoderConfig
 
             self.tokenizer = AcousticEncoder(device=device)
             self.model_config = AcousticEncoderConfig()
 
-        elif tokenizer == TOKENIZERS.SEMANTIC_M.value:
+        elif tokenizer_name == Tokenizers.semantic_s:
+            from transformers import Wav2Vec2FeatureExtractor
+            from .encoder import HubertEncoder, hubert_processor
+            from .configs import HubertEncoderConfig
+
+            self.tokenizer = HubertEncoder(device=device)
+            self.model_config = HubertEncoderConfig()
+
+            processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+            self.tranform_func = partial(hubert_processor, processor=processor)
+
+        elif tokenizer_name == Tokenizers.semantic_m:
             from .encoder import Wav2VecBertEncoder
             from .configs import Wav2VecBertConfig
 
             self.tokenizer = Wav2VecBertEncoder(device=device, quantize=True)
-            self.model_config = Wav2VecBertConfig
+            self.model_config = Wav2VecBertConfig()
 
         else:
             raise ValueError(f"Tokenizer {tokenizer} not supported")
@@ -100,8 +115,8 @@ class AudioToken:
 
         Usage:
             ```python
-            from audiotoken import AudioToken
-            encoder = AudioToken(tokenizer='ACOUSTIC', device='cuda:0')
+            from audiotoken import AudioToken, Tokenizers
+            encoder = AudioToken(tokenizer=Tokenizers.acoustic, device='cuda:0')
             encoded_audio = encoder.encode('path/to/audio.wav')
             ```
         """
@@ -128,7 +143,7 @@ class AudioToken:
                     processed_chunks = [self._encode_single(chunk)[0] for chunk, _ in process_audio_chunks(
                         audio, file_stream, self.model_config.model_sample_rate, chunk_size)]
 
-                return np.concatenate(processed_chunks, axis=-1).reshape(1, 16, -1)
+                return np.concatenate(processed_chunks, axis=-1)
 
         elif isinstance(audio, bytes):
             raise NotImplementedError("Encoding bytes not supported yet")
@@ -146,37 +161,43 @@ class AudioToken:
 
     def encode_batch_files(
             self,
-            audio_files: List[os.PathLike],
             batch_size: int,
             outdir: os.PathLike,
             chunk_size: int = 30,
             num_workers: int = 12,
+            audio_files: Optional[List[os.PathLike]] = None,
+            audio_dir: Optional[Union[os.PathLike, Path]] = None,
             **dataloader_kwargs
-        ):
+        ) -> None:
+
+        assert audio_files or audio_dir, "Either audio_files or audio_dir must be provided"
 
         outdir = sanitize_path(outdir)
 
         num_logical_cores = psutil.cpu_count(logical=True)
-        num_workers = min(num_workers, len(audio_files), num_logical_cores)
-
-        logger.info(f"Encoding {len(audio_files)} audio files with {num_workers} workers")
+        num_workers = min(num_workers, num_logical_cores)
+        if audio_files is not None:
+            num_workers = min(num_workers, len(audio_files), num_logical_cores)
+            logger.info(f"Encoding {len(audio_files)} audio files with {num_workers} workers")
 
         dataset = AudioBatchDataset(
-            audio_files, # type: ignore
+            audio_files=audio_files, # type: ignore
+            audio_dir=audio_dir, # type: ignore
+            transform=self.tranform_func,
             chunk_size=chunk_size,
             sample_rate=self.model_config.model_sample_rate,
             model_token_rate=self.model_config.model_token_rate,
             pad_token=self.model_config.pad_token
         )
         dataloader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                collate_fn=collate_fn,
-                num_workers=num_workers,
-                prefetch_factor=dataloader_kwargs.get('prefetch_factor', 4),
-                pin_memory=dataloader_kwargs.get('pin_memory', True)
-            )
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            prefetch_factor=dataloader_kwargs.get('prefetch_factor', 4),
+            pin_memory=dataloader_kwargs.get('pin_memory', True)
+        )
 
         start_time = time.time()
 
@@ -191,17 +212,14 @@ class AudioToken:
 
             for jdx, (tokens_batch, file_pointer) in enumerate(zip(encoded_audio, file_pointers)):
                 logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
-                save_audio_tokens(tokens_batch, file_pointer, str(outdir))
+
+                if audio_files is not None:
+                    save_audio_tokens(tokens_batch, file_pointer, str(outdir))
+                    continue
+
+                save_rel_audio_tokens(tokens_batch, file_pointer, str(outdir), str(audio_dir))
 
         logger.info(f"Encoding batch files took: {time.time() - start_time:.2f}s")
-
-    def encode_batch(
-            self,
-            audio: List[Union[np.ndarray, os.PathLike, bytes]],
-            chunk_size: Optional[int] = None
-        ):
-
-        raise NotImplementedError("Batch encoding without files not supported yet. Please use `encode_batch_files` for now")
 
 
 if __name__ == '__main__':
@@ -211,7 +229,7 @@ if __name__ == '__main__':
 
     parser = ArgumentParser(description='Encode audio files to tokens.')
 
-    parser.add_argument('--tokenizer', choices=TOKENIZERS._member_names_, type=str, required=True, help='Encoder to run.')
+    parser.add_argument('--tokenizer', choices=Tokenizers._member_names_, type=str, required=True, help='Encoder to run.')
     parser.add_argument('--indir', type=str, required=True, help='Input filename for audio files.')
     parser.add_argument('--outdir', type=str, required=False, help='Output directory for encoded files.')
 
@@ -227,11 +245,12 @@ if __name__ == '__main__':
     encoded = [encoder.encode(Path(a), chunk_size=5) for a in audio_file_paths[:10]]
     print([e.shape for e in encoded])
 
-    print('Running batch encode func')
+    print('Running batch encode func with directory')
     os.makedirs(args.outdir, exist_ok=True)
     encoder.encode_batch_files(
-        audio_file_paths[:100],
         batch_size=12,
         chunk_size=10,
-        outdir=args.outdir
+        outdir=args.outdir,
+        audio_files=audio_file_paths[:10],
+        # audio_dir=args.indir,
     )
