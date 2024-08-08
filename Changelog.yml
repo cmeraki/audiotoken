@@ -10,3 +10,4 @@ changelog:
         - Catching warnings for Encodec models
         - Exposed tokenizers as a class
         - Length of audio for skipping changed from 1s to 0.2s
+        - Updated audio reader func to use torch resampler instead of ffmpeg resampler directly while streaming audio

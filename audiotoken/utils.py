@@ -41,11 +41,10 @@ def process_audio_chunks(
     chunk_size
 ):
     streamer = StreamReader(file_stream)
-    # metadata = streamer.get_src_stream_info(0)
+    metadata = streamer.get_src_stream_info(0)
 
     streamer.add_basic_audio_stream(
-        frames_per_chunk=int(chunk_size*target_sample_rate),
-        sample_rate=target_sample_rate,
+        frames_per_chunk=int(chunk_size*metadata.sample_rate),
         decoder_option={"threads": "0"}
     )
 
@@ -57,7 +56,13 @@ def process_audio_chunks(
         # base, ext = os.path.splitext(file_name)
         # updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
 
-        yield chunk.reshape(1, -1), file_name
+        # Using basic audio stream resampling vs torch resampling results in different behaviors
+        # To keep it consistent with `convert_audio`, we use torchaudio.transforms.Resample
+        # https://stackoverflow.com/questions/77438128/how-to-resample-from-8k-to-16k-with-librosa-or-torchaudio-as-ffmpeg-do-it
+        chunk = chunk.reshape(1, -1)
+        chunk = torchaudio.transforms.Resample(metadata.sample_rate, target_sample_rate)(chunk)
+
+        yield chunk, file_name
 
 
 def iterate_zip(x: os.PathLike, model_sample_rate: int, chunk_size: int = 30) -> Generator[tuple[IO[bytes], str], None, None]:
