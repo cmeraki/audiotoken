@@ -171,6 +171,7 @@ class AudioToken:
         ) -> None:
 
         assert audio_files or audio_dir, "Either audio_files or audio_dir must be provided"
+        assert not (audio_files and audio_dir), "Provide either audio_files or audio_dir, not both"
 
         outdir = sanitize_path(outdir)
 
@@ -247,7 +248,6 @@ if __name__ == '__main__':
         print(p, e.shape)
 
     print('Running batch encode func with directory')
-    os.makedirs(args.outdir, exist_ok=True)
     encoder.encode_batch_files(
         batch_size=12,
         chunk_size=10,
