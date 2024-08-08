@@ -243,7 +243,8 @@ if __name__ == '__main__':
     print('Running single encode func')
     encoder = AudioToken(tokenizer=args.tokenizer, device=device)
     encoded = [encoder.encode(Path(a), chunk_size=5) for a in audio_file_paths[:10]]
-    print([e.shape for e in encoded])
+    for p, e in zip(audio_file_paths[:10], encoded):
+        print(p, e.shape)
 
     print('Running batch encode func with directory')
     os.makedirs(args.outdir, exist_ok=True)
@@ -251,6 +252,6 @@ if __name__ == '__main__':
         batch_size=12,
         chunk_size=10,
         outdir=args.outdir,
-        audio_files=audio_file_paths[:10],
-        # audio_dir=args.indir,
+        # audio_files=audio_file_paths,
+        audio_dir=args.indir,
     )
