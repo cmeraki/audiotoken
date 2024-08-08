@@ -251,7 +251,8 @@ if __name__ == '__main__':
     encoder.encode_batch_files(
         batch_size=12,
         chunk_size=10,
+        num_workers=2,
         outdir=args.outdir,
-        # audio_files=audio_file_paths,
-        audio_dir=args.indir,
+        audio_files=audio_file_paths,
+        # audio_dir=args.indir,
     )

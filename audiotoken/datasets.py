@@ -2,6 +2,7 @@ import glob
 import torch
 import itertools
 import numpy as np
+import multiprocessing as mp
 import torch.nn.functional as F
 from tqdm import tqdm
 from typing import List, Optional
@@ -40,14 +41,15 @@ class AudioBatchDataset(IterableDataset):
             # If the list of audio files is Python list, the memory usage is very high when using multiple workers
             # It is better to convert the list to numpy array
             # More here: https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
-            np_audio_files = np.array(audio_files).astype(np.string_)
-            self.audio_files = np.nditer(np_audio_files)
+            self.audio_files = np.array(audio_files).astype(np.string_)
             self.decode_path = True
 
         elif audio_dir:
             self.audio_files = itertools.chain.from_iterable(
                 glob.iglob(f"{audio_dir}/**/*{ext}", recursive=True) for ext in exts
             ) # type: ignore
+
+        self.audio_q: mp.Queue = mp.Queue(maxsize=10000)
 
         self.sample_rate = sample_rate
         self.model_token_rate = model_token_rate
@@ -57,6 +59,18 @@ class AudioBatchDataset(IterableDataset):
         self.chunk_size = chunk_size
         self.segment_length = chunk_size*sample_rate
         self.stride = int(self.segment_length)
+
+        # Run in a different process to avoid blocking the main process
+        process = mp.Process(target=self._populate_q)
+        process.start()
+
+    def _populate_q(self):
+        for file_path in self.audio_files:
+            file_path = str(file_path, encoding='utf-8') if self.decode_path else file_path
+            self.audio_q.put(file_path)
+            logger.debug(f'Putting in q: {file_path}, {self.audio_q.qsize()}')
+
+        self.audio_q.put(None)
 
     def _iter_chunk(self, waveform: torch.Tensor, file_name: str):
         length = waveform.shape[-1]
@@ -95,8 +109,13 @@ class AudioBatchDataset(IterableDataset):
         worker_id = worker_info.id if worker_info is not None else 0
         logger.info(f"Starting worker {worker_info.id}")
 
-        for file_path in self.audio_files:
-            file_path = str(file_path, encoding='utf-8') if self.decode_path else file_path
+        while self.audio_q.qsize() > 0:
+            file_path = self.audio_q.get()
+
+            if file_path is None:
+                logger.info(f"Worker {worker_id} is done processing")
+                break
+
             logger.info(f'Worker {worker_id} is processing {file_path}')
 
             if file_path.endswith(AUDIO_EXTS):
