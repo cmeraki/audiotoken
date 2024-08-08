@@ -3,11 +3,10 @@ changelog:
     date: 2023-08-07
     changes:
       added:
-        - Lazy loading of models
+        - New semantic_s tokenizer based on Hubert for encoding
         - Torch tensor input for encode API
-        - New batch encode API for taking directory structure as input
+        - Batch API supports directory as input
       updated:
-        - Catching warnings for Encodec models
         - Exposed tokenizers as a class
         - Length of audio for skipping changed from 1s to 0.2s
         - Updated audio reader func to use torch resampler instead of ffmpeg resampler directly while streaming audio
