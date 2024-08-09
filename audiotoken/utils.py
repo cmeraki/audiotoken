@@ -332,6 +332,7 @@ def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root
     try:
         tokens = tokens.cpu().numpy()
         length_tokens = audio_pointer.length_tokens  # type: ignore
+        tokens = tokens[:, :length_tokens]
 
         rel_path = os.path.relpath(audio_pointer.file_name, start=rel_dir)
         rel_path = os.path.dirname(rel_path)
@@ -347,7 +348,7 @@ def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
             prev_tokens = np.hstack([prev_tokens, tokens])
-            np.save(save_path, prev_tokens[:, :length_tokens])
+            np.save(save_path, prev_tokens)
 
         else:
             np.save(save_path, tokens[:, :length_tokens])

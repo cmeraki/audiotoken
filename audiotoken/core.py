@@ -98,7 +98,7 @@ class AudioToken:
             self,
             audio: Union[torch.Tensor, np.ndarray, os.PathLike, bytes, Path],
             chunk_size: Optional[int] = None
-        ) -> np.ndarray:
+        ) -> torch.Tensor:
         """
         Encode the audio file to tokens. The audio can be provided as a numpy array, path to the audio file, or bytes.
 
@@ -145,7 +145,7 @@ class AudioToken:
                     processed_chunks = [self._encode_single(chunk)[0] for chunk, _ in process_audio_chunks(
                         audio, file_stream, self.model_config.model_sample_rate, chunk_size)]
 
-                return np.concatenate(processed_chunks, axis=-1)
+                return torch.cat(processed_chunks, dim=-1)
 
         elif isinstance(audio, bytes):
             raise NotImplementedError("Encoding bytes not supported yet")
@@ -153,13 +153,13 @@ class AudioToken:
         else:
             raise ValueError(f"Unsupported input type {type(audio)}. Should be one of: {np.ndarray, os.PathLike, bytes, Path}")
 
-    def _encode_single(self, audio: torch.Tensor) -> np.ndarray:
+    def _encode_single(self, audio: torch.Tensor) -> torch.Tensor:
         input_batch = audio.to(self.device)
         attention_mask = torch.ones_like(input_batch, device=self.device)
 
         toks = self.tokenizer(input_batch, attention_mask)
 
-        return toks.cpu().numpy()
+        return toks.cpu()
 
     def encode_batch_files(
             self,
@@ -261,10 +261,10 @@ class AudioToken:
             raise ValueError(f"Unsupported input type {type(tokens)}. Should be one of: {np.ndarray, os.PathLike, Path}")
 
     def _decode_single(self, tokens: torch.Tensor) -> torch.Tensor:
-        input_batch = tokens.to(self.device)
+        input_batch = tokens.to(self.device, dtype=torch.int64)
         toks = self.decoder(input_batch) # type:ignore
 
-        return toks.cpu().numpy()
+        return toks.cpu()
 
 if __name__ == '__main__':
     from argparse import ArgumentParser

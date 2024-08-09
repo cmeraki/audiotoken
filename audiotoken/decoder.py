@@ -18,6 +18,8 @@ class AcousticDecoder(torch.nn.Module):
             device: str = 'cpu'
         ):
 
+        super().__init__()
+
         self.model = EncodecModel.encodec_model_24khz()
         self.model.to(device)
         self.model.set_target_bandwidth(config.bandwidth)
