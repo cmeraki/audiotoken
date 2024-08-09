@@ -14,6 +14,7 @@ from .configs import Tokenizers, EncoderConfig, AUDIO_EXTS
 from .datasets import AudioBatchDataset, collate_fn
 from .utils import (
     read_audio,
+    save_audio,
     process_audio_chunks,
     save_audio_tokens,
     sanitize_path,
@@ -53,6 +54,7 @@ class AudioToken:
         tokenizer_name = Tokenizers(tokenizer)
 
         self.tokenizer: torch.nn.Module
+        self.decoder: Optional[torch.nn.Module] = None
         self.model_config: EncoderConfig
         self.tranform_func: Optional[Callable] = None
 
@@ -96,7 +98,7 @@ class AudioToken:
             self,
             audio: Union[torch.Tensor, np.ndarray, os.PathLike, bytes, Path],
             chunk_size: Optional[int] = None
-        ) -> np.ndarray:
+        ) -> torch.Tensor:
         """
         Encode the audio file to tokens. The audio can be provided as a numpy array, path to the audio file, or bytes.
 
@@ -143,7 +145,7 @@ class AudioToken:
                     processed_chunks = [self._encode_single(chunk)[0] for chunk, _ in process_audio_chunks(
                         audio, file_stream, self.model_config.model_sample_rate, chunk_size)]
 
-                return np.concatenate(processed_chunks, axis=-1)
+                return torch.cat(processed_chunks, dim=-1)
 
         elif isinstance(audio, bytes):
             raise NotImplementedError("Encoding bytes not supported yet")
@@ -151,13 +153,13 @@ class AudioToken:
         else:
             raise ValueError(f"Unsupported input type {type(audio)}. Should be one of: {np.ndarray, os.PathLike, bytes, Path}")
 
-    def _encode_single(self, audio: torch.Tensor) -> np.ndarray:
+    def _encode_single(self, audio: torch.Tensor) -> torch.Tensor:
         input_batch = audio.to(self.device)
         attention_mask = torch.ones_like(input_batch, device=self.device)
 
         toks = self.tokenizer(input_batch, attention_mask)
 
-        return toks.cpu().numpy()
+        return toks.cpu()
 
     def encode_batch_files(
             self,
@@ -223,6 +225,47 @@ class AudioToken:
         logger.info(f"Encoding batch files took: {time.time() - start_time:.2f}s")
 
 
+    def load_decoder(self):
+        if self.decoder is None:
+            from .decoder import AcousticDecoder
+            self.decoder = AcousticDecoder(device=self.device)
+
+    def decode(
+            self,
+            tokens: Union[torch.Tensor, np.ndarray, os.PathLike, Path],
+        ) -> torch.Tensor:
+        """
+        Decode the tokens back to audio
+
+        Usage:
+            ```python
+            from audiotoken import AudioToken, Tokenizers
+            encoder = AudioToken(tokenizer=Tokenizers.acoustic, device='cuda:0')
+            encoded_audio = encoder.encode('path/to/audio.wav')
+            decoded_audio = encoder.decode(encoded_audio)
+            ```
+        """
+        self.load_decoder()
+
+        if isinstance(tokens, np.ndarray):
+            return self._decode_single(torch.from_numpy(tokens))
+
+        elif isinstance(tokens, torch.Tensor):
+            return self._decode_single(tokens)
+
+        elif isinstance(tokens, os.PathLike) or isinstance(tokens, Path):
+            tokens_mem = torch.load(tokens, map_location=self.device)
+            logger.debug(f'Loaded tokens from path {tokens_mem.shape}')
+            return self._decode_single(tokens_mem)
+        else:
+            raise ValueError(f"Unsupported input type {type(tokens)}. Should be one of: {np.ndarray, os.PathLike, Path}")
+
+    def _decode_single(self, tokens: torch.Tensor) -> torch.Tensor:
+        input_batch = tokens.to(self.device, dtype=torch.int64)
+        toks = self.decoder(input_batch) # type:ignore
+
+        return toks.cpu()
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
@@ -242,17 +285,28 @@ if __name__ == '__main__':
     print(f'Found {len(audio_file_paths)} audio files.')
 
     print('Running single encode func')
-    encoder = AudioToken(tokenizer=args.tokenizer, device=device)
-    encoded = [encoder.encode(Path(a), chunk_size=5) for a in audio_file_paths[:10]]
+    tokenizer = AudioToken(tokenizer=args.tokenizer, device=device)
+
+    encoded = [tokenizer.encode(Path(a), chunk_size=5) for a in audio_file_paths[:10]]
     for p, e in zip(audio_file_paths[:10], encoded):
         print(p, e.shape)
 
-    print('Running batch encode func with directory')
-    encoder.encode_batch_files(
-        batch_size=12,
-        chunk_size=10,
-        num_workers=2,
-        outdir=args.outdir,
-        audio_files=audio_file_paths,
-        # audio_dir=args.indir,
-    )
+    print('Running single decode func')
+    decoded = [tokenizer.decode(e) for e in encoded]
+    for p, d in zip(audio_file_paths[:10], decoded):
+        print(p, d.shape)
+        save_audio(
+            d,
+            path=os.path.join(args.outdir, os.path.basename(p)),
+            sample_rate=tokenizer.model_config.model_sample_rate
+        )
+
+    # print('Running batch encode func with directory')
+    # encoder.encode_batch_files(
+    #     batch_size=12,
+    #     chunk_size=10,
+    #     num_workers=2,
+    #     outdir=args.outdir,
+    #     audio_files=audio_file_paths,
+    #     # audio_dir=args.indir,
+    # )

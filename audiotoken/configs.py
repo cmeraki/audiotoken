@@ -33,7 +33,11 @@ class AcousticEncoderConfig(EncoderConfig):
 
 @dataclass
 class AcousticDecoderConfig(AcousticEncoderConfig):
-    pass
+    model_id: str = 'encodec'
+    model_sample_rate: int = 24_000
+    bandwidth: float = 12
+    model_token_rate: int = 75
+    pad_token: Optional[int] = 0
 
 @dataclass
 class HubertEncoderConfig(EncoderConfig):
@@ -46,6 +50,10 @@ class HubertEncoderConfig(EncoderConfig):
         filename='mhubert_base_vp_en_es_fr_it3_L11_km1000.bin'
     )
     pad_token: Optional[int] = 0
+
+@dataclass
+class HubertDecoderConfig(HubertEncoderConfig):
+    pass
 
 @dataclass
 class Wav2VecBertConfig(EncoderConfig):

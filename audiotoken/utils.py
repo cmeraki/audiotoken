@@ -1,5 +1,3 @@
-import pathlib
-import io
 import os
 import torch
 import psutil
@@ -7,12 +5,13 @@ import zipfile
 import tarfile
 import numpy as np
 import torchaudio
+from pathlib import Path
 
 from tqdm import tqdm
 from torchaudio.io import StreamReader
 from encodec.utils import convert_audio
 from datasets import load_dataset
-from typing import IO, Generator
+from typing import IO, Generator, Union
 
 from .configs import AudioConfig
 from .logger import get_logger
@@ -304,7 +303,7 @@ def load_vq_weights(model_weights, model):
 
 
 def sanitize_path(path):
-    path = pathlib.Path(path).expanduser()
+    path = Path(path).expanduser()
 
     if not path.is_absolute():
         path = path.absolute()
@@ -333,6 +332,7 @@ def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root
     try:
         tokens = tokens.cpu().numpy()
         length_tokens = audio_pointer.length_tokens  # type: ignore
+        tokens = tokens[:, :length_tokens]
 
         rel_path = os.path.relpath(audio_pointer.file_name, start=rel_dir)
         rel_path = os.path.dirname(rel_path)
@@ -348,7 +348,7 @@ def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
             prev_tokens = np.hstack([prev_tokens, tokens])
-            np.save(save_path, prev_tokens[:, :length_tokens])
+            np.save(save_path, prev_tokens)
 
         else:
             np.save(save_path, tokens[:, :length_tokens])
@@ -357,3 +357,22 @@ def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root
 
     except Exception as e:
         logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
+
+
+# Helper function from encodec
+def save_audio(
+        wav: torch.Tensor,
+        path: Union[Path, str],
+        sample_rate: int,
+        rescale: bool = False
+    ):
+    limit = 0.99
+
+    if rescale:
+        mx = wav.abs().max()
+        wav = wav * min(limit / mx, 1)
+
+    else:
+        wav = wav.clamp(-limit, limit)
+
+    torchaudio.save(path, wav, sample_rate=sample_rate, encoding='PCM_S', bits_per_sample=16)
