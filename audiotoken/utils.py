@@ -1,4 +1,3 @@
-import io
 import os
 import torch
 import psutil
@@ -6,16 +5,18 @@ import zipfile
 import tarfile
 import numpy as np
 import torchaudio
+from pathlib import Path
 
 from tqdm import tqdm
 from torchaudio.io import StreamReader
 from encodec.utils import convert_audio
 from datasets import load_dataset
-from typing import IO, Generator
+from typing import IO, Generator, Union
 
 from .configs import AudioConfig
-from .logger import logger
+from .logger import get_logger
 
+logger = get_logger(__name__)
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
@@ -35,15 +36,14 @@ def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
 def process_audio_chunks(
     file_name,
     file_stream,
-    chunk_size,
-    target_sample_rate
+    target_sample_rate,
+    chunk_size
 ):
     streamer = StreamReader(file_stream)
-    # metadata = streamer.get_src_stream_info(0)
+    metadata = streamer.get_src_stream_info(0)
 
     streamer.add_basic_audio_stream(
-        frames_per_chunk=int(chunk_size*target_sample_rate),
-        sample_rate=target_sample_rate,
+        frames_per_chunk=int(chunk_size*metadata.sample_rate),
         decoder_option={"threads": "0"}
     )
 
@@ -52,13 +52,19 @@ def process_audio_chunks(
 
         start_idx = idx * chunk_size
         end_idx = start_idx + chunk_size
-        base, ext = os.path.splitext(file_name)
-        updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
+        # base, ext = os.path.splitext(file_name)
+        # updated_file_name = f"{base}__{start_idx}_{end_idx}{ext}"
 
-        yield chunk.reshape(1, -1), updated_file_name
+        # Using basic audio stream resampling vs torch resampling results in different behaviors
+        # To keep it consistent with `convert_audio`, we use torchaudio.transforms.Resample
+        # https://stackoverflow.com/questions/77438128/how-to-resample-from-8k-to-16k-with-librosa-or-torchaudio-as-ffmpeg-do-it
+        chunk = chunk.reshape(1, -1)
+        chunk = torchaudio.transforms.Resample(metadata.sample_rate, target_sample_rate)(chunk)
+
+        yield chunk, file_name
 
 
-def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
+def iterate_zip(x: os.PathLike, model_sample_rate: int, chunk_size: int = 30) -> Generator[tuple[IO[bytes], str], None, None]:
     """
     Given a zip file, this function reads a single audio file
     at once and returns the raw bytes of the audio file
@@ -86,13 +92,13 @@ def iterate_zip(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 file_name=file_name,
                 file_stream=file_content,
                 target_sample_rate=model_sample_rate,
-                chunk_size=30
+                chunk_size=chunk_size
             )
 
         logger.debug(f'Processed {file_name} in zip: {x}')
 
 
-def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[bytes], str], None, None]:
+def iterate_tar(x: os.PathLike, model_sample_rate: int, chunk_size: int = 30) -> Generator[tuple[IO[bytes], str], None, None]:
     """
     Given a tar file, this function reads a single audio file
     at once and returns the raw bytes of the audio file
@@ -120,7 +126,7 @@ def iterate_tar(x: os.PathLike, model_sample_rate: int) -> Generator[tuple[IO[by
                 file_name=file_name,
                 file_stream=file_content,
                 target_sample_rate=model_sample_rate,
-                chunk_size=30
+                chunk_size=chunk_size
             )
 
             logger.debug(f'Processed {file_name} in tar: {x}')
@@ -163,17 +169,18 @@ def save_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir
         # tokens = tokens.permute(1, 0, 2).reshape(K, B*T).cpu().numpy()
 
         tokens = tokens.cpu().numpy()
-        tokens_len = audio_pointer.tokens_len  # type: ignore
+        length_tokens = audio_pointer.length_tokens  # type: ignore
+        tokens = tokens[:, :length_tokens]
 
         logger.debug(f'Saving file: {filename} with shape: {tokens.shape} to {save_path}')
 
         if os.path.exists(save_path):
             prev_tokens = np.load(save_path)
             prev_tokens = np.hstack([prev_tokens, tokens])
-            np.save(save_path, prev_tokens[:, :tokens_len])
+            np.save(save_path, prev_tokens)
 
         else:
-            np.save(save_path, tokens[:, :tokens_len])
+            np.save(save_path, tokens[:, :length_tokens])
 
         logger.debug(f"Saved tokens for {filename} to {save_path}")
 
@@ -230,7 +237,7 @@ def set_process_affinity(process_id, cores):
 
     How to use:
     ```python
-    from src.utils import set_process_affinity
+    from .utils import set_process_affinity
     # Set the process affinity to the first 4 cores
     set_process_affinity(os.getpid(), [0, 1, 2, 3])
     ```
@@ -293,3 +300,79 @@ def load_vq_weights(model_weights, model):
     model.load_state_dict(new_state_dict)
 
     return model
+
+
+def sanitize_path(path):
+    path = Path(path).expanduser()
+
+    if not path.is_absolute():
+        path = path.absolute()
+
+    path = path.resolve()
+
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+    return str(path)
+
+
+def collate_audio_tokens(prev_tokens: np.ndarray, new_tokens: torch.Tensor, audio_pointer: AudioConfig):
+
+    new_tokens = new_tokens.cpu().numpy()
+    length_tokens = audio_pointer.length_tokens  # type: ignore
+
+    tokens = np.hstack([prev_tokens, new_tokens])
+    tokens = tokens[:, :length_tokens]
+
+    return tokens
+
+
+def save_rel_audio_tokens(tokens: torch.Tensor, audio_pointer: AudioConfig, root_dir: str, rel_dir: str):
+
+    try:
+        tokens = tokens.cpu().numpy()
+        length_tokens = audio_pointer.length_tokens  # type: ignore
+        tokens = tokens[:, :length_tokens]
+
+        rel_path = os.path.relpath(audio_pointer.file_name, start=rel_dir)
+        rel_path = os.path.dirname(rel_path)
+        output_path = os.path.join(root_dir, rel_path)
+
+        os.makedirs(output_path, exist_ok=True)
+
+        filename = os.path.splitext(os.path.basename(audio_pointer.file_name))[0]
+        save_path = os.path.join(output_path, f'{filename}.npy')
+
+        logger.debug(f'Saving file: {filename} with shape: {length_tokens} to {save_path}')
+
+        if os.path.exists(save_path):
+            prev_tokens = np.load(save_path)
+            prev_tokens = np.hstack([prev_tokens, tokens])
+            np.save(save_path, prev_tokens)
+
+        else:
+            np.save(save_path, tokens[:, :length_tokens])
+
+        logger.debug(f"Saved tokens for {filename} to {save_path}")
+
+    except Exception as e:
+        logger.error(f'Error saving tokens for {audio_pointer.file_name} with error {e}')
+
+
+# Helper function from encodec
+def save_audio(
+        wav: torch.Tensor,
+        path: Union[Path, str],
+        sample_rate: int,
+        rescale: bool = False
+    ):
+    limit = 0.99
+
+    if rescale:
+        mx = wav.abs().max()
+        wav = wav * min(limit / mx, 1)
+
+    else:
+        wav = wav.clamp(-limit, limit)
+
+    torchaudio.save(path, wav, sample_rate=sample_rate, encoding='PCM_S', bits_per_sample=16)

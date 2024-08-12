@@ -202,7 +202,7 @@ if __name__ == '__main__':
     import time
     import torch
     from tqdm import tqdm
-    from src.utils import read_audio, find_audio_files
+    from .utils import read_audio, find_audio_files
 
     device = 'cuda'
     audio_files = find_audio_files('./data/test-clean/LibriSpeech/test-clean/')

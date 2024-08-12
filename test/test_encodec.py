@@ -9,10 +9,10 @@ from queue import Queue
 from matplotlib import pyplot as plt
 from torchmetrics.audio import ScaleInvariantSignalNoiseRatio
 
-from src.encoder import VoiceEncoder
-from src.decoder import VoiceDecoder
-from src.utils import read_audio
-from src.configs import VoiceEncoderConfig, VoiceDecoderConfig
+from .encoder import VoiceEncoder
+from .decoder import VoiceDecoder
+from .utils import read_audio
+from .configs import AcousticEncoderConfig, 
 
 if __name__ == '__main__':
 
@@ -20,21 +20,21 @@ if __name__ == '__main__':
     audio_files: Queue[torch.Tensor] = Queue()
     audio_file = read_audio(
         Path(audio_file_paths[0]).expanduser(),
-        VoiceEncoderConfig.model_sample_rate
+        AcousticEncoderConfig.model_sample_rate
     )
     audio_files.put(audio_file)
 
     voice_encoder = VoiceEncoder(
-        bandwidth=VoiceEncoderConfig.bandwidth,
-        single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        batch_size=VoiceEncoderConfig.batch_size,
-        overlap=VoiceEncoderConfig.overlap,
+        bandwidth=AcousticEncoderConfig.bandwidth,
+        single_segment_duration=AcousticEncoderConfig.single_segment_duration,
+        batch_size=AcousticEncoderConfig.batch_size,
+        overlap=AcousticEncoderConfig.overlap,
     )
 
     voice_decoder = VoiceDecoder(
-        bandwidth=VoiceDecoderConfig.bandwidth,
-        single_segment_duration=VoiceDecoderConfig.single_segment_duration,
-        overlap=VoiceDecoderConfig.overlap,
+        bandwidth=.bandwidth,
+        single_segment_duration=.single_segment_duration,
+        overlap=.overlap,
     )
 
     si_snr = ScaleInvariantSignalNoiseRatio()

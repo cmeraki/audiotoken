@@ -12,7 +12,7 @@ import torch
 from functools import partial
 
 from torch.utils.data import DataLoader
-from sklearn.cluster import MiniBatchKMeans
+# from sklearn.cluster import MiniBatchKMeans
 from vector_quantize_pytorch import VectorQuantize
 
 from ..logger import get_logger
@@ -142,6 +142,9 @@ def get_features_batch(dataset, encoder, max_size=1000):
 
 
 def get_vq_model(n_clusters: int, batch_size: int = 16):
+    global EMBEDDING_DIM
+    global DEVICE
+
     vq = VectorQuantize(
         dim=EMBEDDING_DIM,
         codebook_size=n_clusters,
@@ -166,32 +169,32 @@ def get_vq_model(n_clusters: int, batch_size: int = 16):
     return vq
 
 
-def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
-    return MiniBatchKMeans(
-        n_clusters=n_clusters,
-        max_iter=config.max_iter,
-        batch_size=config.batch_size,
-        max_no_improvement=config.max_no_improvement,
-        n_init=config.n_init,
-        reassignment_ratio=config.reassignment_ratio,
-        verbose=0,
-        compute_labels=True,
-        init_size=None,
-    )
+# def get_kmeans_model(n_clusters: int, config: KMeansClusterConfig):
+#     return MiniBatchKMeans(
+#         n_clusters=n_clusters,
+#         max_iter=config.max_iter,
+#         batch_size=config.batch_size,
+#         max_no_improvement=config.max_no_improvement,
+#         n_init=config.n_init,
+#         reassignment_ratio=config.reassignment_ratio,
+#         verbose=0,
+#         compute_labels=True,
+#         init_size=None,
+#     )
 
 
-def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBatchKMeans:
-    logger.info(f'Fitting k-means model with {features_batch.shape[0]} samples')
+# def train_kmeans(kmodel: MiniBatchKMeans, features_batch: np.ndarray) -> MiniBatchKMeans:
+#     logger.info(f'Fitting k-means model with {features_batch.shape[0]} samples')
 
-    start_time = time.time()
-    kmodel.partial_fit(features_batch)
+#     start_time = time.time()
+#     kmodel.partial_fit(features_batch)
 
-    logger.info(f"K-means partial training took {time.time() - start_time:.2f}s")
+#     logger.info(f"K-means partial training took {time.time() - start_time:.2f}s")
 
-    inertia = -kmodel.score(features_batch) / len(features_batch)
-    logger.info(f"Total inertia: {round(inertia, 2)}\n")
+#     inertia = -kmodel.score(features_batch) / len(features_batch)
+#     logger.info(f"Total inertia: {round(inertia, 2)}\n")
 
-    return kmodel
+#     return kmodel
 
 
 def main(args):
@@ -235,7 +238,7 @@ def main(args):
         processor = AutoFeatureExtractor.from_pretrained(Wav2VecBertConfig.model_id)
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=Wav2VecBertConfig.model_sample_rate,
             single_segment_duration=Wav2VecBertConfig.single_segment_duration,
             model_token_rate=Wav2VecBertConfig.model_token_rate,
@@ -262,7 +265,7 @@ def main(args):
         tranform_func = partial(hubert_processor, processor=processor)
 
         dataset = AudioBatchDataset(
-            files,
+            audio_files=files,
             sample_rate=HubertEncoderConfig.model_sample_rate,
             single_segment_duration=HubertEncoderConfig.single_segment_duration,
             transform=tranform_func,

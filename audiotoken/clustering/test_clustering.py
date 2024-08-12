@@ -11,9 +11,9 @@ from time import time
 import matplotlib.pyplot as plt
 from transformers import Wav2Vec2FeatureExtractor, AutoFeatureExtractor, WhisperFeatureExtractor
 
-from src.utils import read_audio, find_files
-from src.encoder import Wav2VecBertEncoder, HubertEncoder, WhisperEncoder, w2vbert2_processor, hubert_processor, whisper_processor
-from src.configs import Wav2VecBertConfig, HubertEncoderConfig, WhisperEncoderConfig
+from ..utils import read_audio, find_files
+from ..encoder import Wav2VecBertEncoder, HubertEncoder, WhisperEncoder, w2vbert2_processor, hubert_processor, whisper_processor
+from ..configs import Wav2VecBertConfig, HubertEncoderConfig, WhisperEncoderConfig
 
 EMBEDDING_DIM = 1024
 

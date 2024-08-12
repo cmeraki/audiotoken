@@ -5,7 +5,7 @@ from queue import Queue
 from torch.utils.data import DataLoader
 
 from ..src.encoder import VoiceEncoder
-from ..src.configs import VoiceEncoderConfig
+from ..src.configs import AcousticEncoderConfig
 from ..src.utils import find_audio_files
 from ..src.datasets import AudioDataset
 
@@ -92,10 +92,10 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     voice_encoder = VoiceEncoder(
-        bandwidth=VoiceEncoderConfig.bandwidth,
-        single_segment_duration=VoiceEncoderConfig.single_segment_duration,
-        batch_size=VoiceEncoderConfig.batch_size,
-        overlap=VoiceEncoderConfig.overlap,
+        bandwidth=AcousticEncoderConfig.bandwidth,
+        single_segment_duration=AcousticEncoderConfig.single_segment_duration,
+        batch_size=AcousticEncoderConfig.batch_size,
+        overlap=AcousticEncoderConfig.overlap,
         device=DEVICE,
     )
     files = find_audio_files(args.indir)
