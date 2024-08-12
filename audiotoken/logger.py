@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 from logging.handlers import RotatingFileHandler
 
-def get_logger(name:str, log_file:Optional[str] = "app.log", level:str = "ERROR"):
+def get_logger(name:str, log_file:Optional[str] = None, level:str = "ERROR"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
 
