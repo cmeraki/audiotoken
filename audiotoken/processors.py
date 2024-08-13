@@ -3,7 +3,7 @@ import torch
 from typing import Dict
 import torch.nn.functional as F
 
-from src.utils import hertz_to_mel, mel_to_hertz, create_triangular_filter_bank
+from .utils import hertz_to_mel, mel_to_hertz, create_triangular_filter_bank
 
 def mel_filter_bank(
     num_frequency_bins: int,
@@ -49,13 +49,11 @@ class Wav2VecBertProcessor(torch.nn.Module):
         num_mel_bins=80,
         stride=2,
         padding_value: float = 1.0,
-        pad_to_multiple_of: int = 2,
     ):
         super().__init__()
 
         self.stride = stride
         self.padding_value = padding_value
-        self.pad_to_multiple_of = pad_to_multiple_of
 
         self.num_frequency_bins = 256
         self.sampling_rate = sampling_rate
@@ -141,7 +139,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
         waveform: torch.Tensor,
         window: torch.Tensor,
         mel_filters: torch.Tensor,
-        device: str,
+        device: torch.device,
         **kwargs
     ) -> torch.Tensor:
 
@@ -191,12 +189,12 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         return spectrogram
 
-    def _pad(self, arr: torch.Tensor, mask: torch.Tensor) -> tuple:
+    def _pad(self, arr: torch.Tensor, mask: torch.Tensor, pad_to_multiple_of: int) -> tuple:
         B, N, D = arr.shape
 
         P = 0
-        if self.pad_to_multiple_of > 0:
-            P = self.pad_to_multiple_of - (N % self.pad_to_multiple_of) if N % self.pad_to_multiple_of > 0 else 0
+        if pad_to_multiple_of > 0:
+            P = pad_to_multiple_of - (N % pad_to_multiple_of) if N % pad_to_multiple_of > 0 else 0
 
         # Create the padded array after applying the original mask provided
         padded_array = torch.where(mask == 0, self.padding_value, arr)
@@ -208,7 +206,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
 
         return padded_array, attention_mask
 
-    def forward(self, raw_speech: torch.Tensor, mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, raw_speech: torch.Tensor, mask: torch.Tensor, pad_to_multiple_of: int = 2) -> Dict[str, torch.Tensor]:
 
         device = raw_speech.device
         self._initialize_buffers(device)
@@ -258,7 +256,7 @@ class Wav2VecBertProcessor(torch.nn.Module):
             batch_size, (num_frames-remainder) // self.stride, num_channels * self.stride
         )
 
-        input_features, attention_mask = self._pad(features, spectrogram_mask)
+        input_features, attention_mask = self._pad(features, spectrogram_mask, pad_to_multiple_of)
 
         padded_inputs = {
             "input_features": input_features,
@@ -284,8 +282,8 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     from transformers import SeamlessM4TFeatureExtractor
 
-    from src.utils import read_audio, find_audio_files
-    from src.configs import Wav2VecBertConfig
+    from .utils import read_audio, find_audio_files
+    from .configs import Wav2VecBertConfig
 
     parser = ArgumentParser()
 
@@ -328,13 +326,12 @@ if __name__ == '__main__':
         num_mel_bins=80,
         sampling_rate=16000,
         stride=2,
-        padding_value=1,
-        pad_to_multiple_of=500
+        padding_value=1
     )
 
     start_time = time.time()
     batched_out = batched_feature_extractor(
-        tensor_audio_files, tensor_attention_masks
+        tensor_audio_files, tensor_attention_masks, pad_to_multiple_of=500
     )
     torch.cuda.synchronize()
 

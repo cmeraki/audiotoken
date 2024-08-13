@@ -200,7 +200,7 @@ class W2VBert2Processor(torch.nn.Module):
 
 if __name__ == '__main__':
     import torch
-    from src.utils import read_audio
+    from .utils import read_audio
 
     device = 'cuda'
     audio = read_audio('data/test-clean/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac', 16_000) # type: ignore

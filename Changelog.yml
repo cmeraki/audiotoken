@@ -1,0 +1,24 @@
+changelog:
+  - version: 0.2.0
+    date: 2024-08-08
+    changes:
+      added:
+        - New semantic_s tokenizer based on Hubert for encoding
+        - Torch tensor input for encode API
+        - Batch API supports directory as input
+      updated:
+        - Exposed tokenizers as a class
+        - Length of audio for skipping changed from 1s to 0.2s
+        - Updated audio reader func to use torch resampler instead of ffmpeg resampler directly while streaming audio
+  - version: 0.2.1
+    date: 2024-08-09
+    changes:
+      updated:
+        - Added check that only one of audio_dir or audio_file is provided in batch API
+  - version: 0.2.2
+    date: 2024-08-09
+    changes:
+      updated:
+        - All encode/decode APIs will have torch output
+      bugfix:
+        - Fixed bug in batch API where tokens length was not correctly calculated for `audio_dir` option
