@@ -17,7 +17,7 @@ def _prepare_source(
 ):
     source_arr = source_arr + source_offset
     source_arr = source_arr.reshape(1, -1)
-    source_arr = source_arr[0: max_source_tokens]
+    source_arr = source_arr[:, :max_source_tokens]
 
     return source_arr
 
@@ -99,7 +99,7 @@ class Wav2VecBertDecoder(torch.nn.Module):
     def __init__(
             self,
             config: 'Wav2VecBertDecoderConfig' = Wav2VecBertDecoderConfig(),
-            lanugage: str = 'en',
+            lanugage: str = 'hi',
             device: str = 'cpu'
         ):
         super().__init__()
@@ -113,8 +113,9 @@ class Wav2VecBertDecoder(torch.nn.Module):
         self.model = get_model(
             vocab_size=self.config.VOCAB_SIZE,
             path=model_id,
+            device=self.device
         )
-        self.model.to(device)
+        self.model.to(self.device)
         self.model.eval()
 
         # Load the model for bark
@@ -144,26 +145,22 @@ class Wav2VecBertDecoder(torch.nn.Module):
             max_source_tokens=self.config.max_source_tokens
         )
 
-        infer_tensor = torch.tensor(self.config.INFER_TOKEN[COMMONS.SEMANTIC]).reshape(1, -1)
+        infer_tensor = torch.tensor(self.config.INFER_TOKEN[COMMONS.ACOUSTIC]).reshape(1, -1)
         source_tokens = torch.hstack(
             [source_tokens, infer_tensor]
-        )
-
-        input_tokens = source_tokens.to(self.device)
+        ).to(self.device)
 
         with ctx:
             with torch.no_grad():
                 target_tokens = self.model.generate(
-                    input_tokens,
+                    source_tokens,
                     max_new_tokens=1024,
                     temperature=0.8,
                     top_k=100,
                     stop_token=self.config.STOP_TOKEN[COMMONS.ACOUSTIC]
                 )
 
-                return target_tokens
-
-                target_tokens = target_tokens.detach().cpu().numpy()[0]
+        target_tokens = target_tokens.detach().cpu().numpy()[0]
 
         target_tokens = _extract_new_tokens(
             y=target_tokens,

@@ -41,7 +41,7 @@ class AcousticEncoderConfig(EncoderConfig):
 class AcousticDecoderConfig(AcousticEncoderConfig):
     model_id: str = 'encodec'
     model_sample_rate: int = 24_000
-    bandwidth: float = 12
+    bandwidth: float = 6
     model_token_rate: int = 75
     pad_token: Optional[int] = 0
 
@@ -94,7 +94,7 @@ class Wav2VecBertDecoderConfig:
 
     vocab_sizes = {
         COMMONS.TEXT: 50257,
-        COMMONS.SEMANTIC: 2048,
+        COMMONS.SEMANTIC: 1000,
         COMMONS.ACOUSTIC: 2048,
     }
     max_source_tokens = 256

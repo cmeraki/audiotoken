@@ -347,7 +347,7 @@ if __name__ == '__main__':
         save_audio(
             d,
             path=os.path.join(args.outdir, os.path.basename(p)),
-            sample_rate=tokenizer.model_config.model_sample_rate
+            sample_rate=24_000
         )
 
     # print('Running batch encode func with directory')

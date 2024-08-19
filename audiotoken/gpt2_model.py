@@ -311,7 +311,8 @@ def get_model(
         dropout=0.0,
         block_size=1024,
         bias=False,
-        path=None
+        path=None,
+        device='cpu'
     ):
 
     model_args = dict(
@@ -324,19 +325,17 @@ def get_model(
         dropout=dropout
     )
 
-    if path:
-        config = torch.load(path)['config']
-        model_args.update(config)
-
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 
     if path:
-        state_dict = torch.load(path)['model']
+        state_dict = torch.load(path, map_location=device)['model']
         unwanted_prefix = '_orig_mod.'
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
         model.load_state_dict(state_dict)
+
+    logger.info(gptconf)
 
     return model
