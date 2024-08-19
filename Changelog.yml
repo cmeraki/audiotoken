@@ -26,12 +26,10 @@ changelog:
     date: 2024-08-19
     changes:
       added:
-        - `semantic_m` decoder`
+        - Added english decoder for `semantic_s`, hindi decoder for `semantic_m`
       updated:
-        - MAJOR_CHANGE: `semantic_m` tokenizer is updated
+        - MAJOR_CHANGE: Tokenizer for `semantic_m` is updated. Previous tokenizer will not be valid with the new de tokenizer
         - README.md updated with batch API example
         - Lazy loading of tokenizers (#16)
         - Decoder output is now first converted to float 32 before returning (#20)
         - Reorganized the repo
-      bugfix:
-        - Moved queue of loading files outside of the Dataset class to avoid memory leak (#17)

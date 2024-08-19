@@ -5,7 +5,7 @@ from encodec import EncodecModel
 
 from .logger import get_logger
 from .gpt2_model import get_model
-from .configs import AcousticDecoderConfig, HubertDecoderConfig, Wav2VecBertDecoderConfig, COMMONS, SUPPORTED_LANGS
+from .configs import AcousticDecoderConfig, HubertDecoderConfig, Wav2VecBertDecoderConfig, COMMONS
 from .utils import ctx
 
 logger = get_logger(__name__)
@@ -80,13 +80,79 @@ class HubertDecoder(torch.nn.Module):
     def __init__(
             self,
             config: 'HubertDecoderConfig' = HubertDecoderConfig(),
+            lanugage: str = COMMONS.EN,
             device: str = 'cpu'
         ):
 
-       raise NotImplementedError('HubertDecoder is not implemented yet')
+       super().__init__()
 
-    def forward(self, input_batch: torch.Tensor):
-        pass
+       self.device = device
+       self.config = config
+       assert lanugage in self.config.suported_languages, f'{lanugage} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
+       model_id = self.config.en_model_id
+
+       self.model = get_model(
+           vocab_size=self.config.VOCAB_SIZE,
+           path=model_id,
+           device=self.device
+       )
+       self.model.to(self.device)
+       self.model.eval()
+
+       # Load the model for bark
+       _ = bark.generation.load_model(
+           use_gpu=True if 'cuda' in self.device else False,
+           model_type="fine"
+       )
+
+    def nar_bark(self, tokens_02):
+        tokens_02 = _deserialize_acoustic_tokens(tokens_02)
+
+        with ctx:
+            with torch.no_grad():
+                tokens = bark.api.generate_fine(
+                    x_coarse_gen=tokens_02[0:2, :],
+                    silent=False
+                )
+        tokens = np.expand_dims(tokens, axis=0)
+        tokens = torch.from_numpy(tokens)
+
+        return tokens
+
+    def forward(self, input_batch: torch.Tensor) -> torch.Tensor:
+        source_tokens = _prepare_source(
+            source_arr=input_batch,
+            source_offset=self.config.OFFSET[COMMONS.SEMANTIC],
+            max_source_tokens=self.config.max_source_tokens
+        )
+
+        infer_tensor = torch.tensor(self.config.INFER_TOKEN[COMMONS.ACOUSTIC]).reshape(1, -1)
+        source_tokens = torch.hstack(
+            [source_tokens, infer_tensor]
+        ).to(self.device)
+
+        with ctx:
+            with torch.no_grad():
+                target_tokens = self.model.generate(
+                    source_tokens,
+                    max_new_tokens=1024,
+                    temperature=0.8,
+                    top_k=100,
+                    stop_token=self.config.STOP_TOKEN[COMMONS.ACOUSTIC]
+                )
+
+        target_tokens = target_tokens.detach().cpu().numpy()[0]
+
+        target_tokens = _extract_new_tokens(
+            y=target_tokens,
+            infer_token=self.config.INFER_TOKEN[COMMONS.ACOUSTIC],
+            stop_token=self.config.STOP_TOKEN[COMMONS.ACOUSTIC]
+        )
+        target_tokens = target_tokens - self.config.OFFSET[COMMONS.ACOUSTIC]
+
+        acoustic_tokens = self.nar_bark(target_tokens)
+
+        return acoustic_tokens
 
 
 class Wav2VecBertDecoder(torch.nn.Module):
@@ -99,16 +165,15 @@ class Wav2VecBertDecoder(torch.nn.Module):
     def __init__(
             self,
             config: 'Wav2VecBertDecoderConfig' = Wav2VecBertDecoderConfig(),
-            lanugage: str = 'hi',
+            lanugage: str = COMMONS.HI,
             device: str = 'cpu'
         ):
         super().__init__()
 
-        assert lanugage in SUPPORTED_LANGS, f'{lanugage} language not supported for the decoder. Only {SUPPORTED_LANGS} are supported.'
-
         self.device = device
         self.config = config
-        model_id = config.hi_model_id if lanugage == 'hi' else config.en_model_id
+        assert lanugage in self.config.suported_languages, f'{lanugage} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
+        model_id = self.config.hi_model_id if lanugage == COMMONS.HI else self.config.en_model_id
 
         self.model = get_model(
             vocab_size=self.config.VOCAB_SIZE,
