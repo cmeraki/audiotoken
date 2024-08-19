@@ -16,11 +16,6 @@ Wav2Vec2BertSelfAttention.forward = sdpa_forward
 
 logger = get_logger(__name__)
 
-torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-torch.set_float32_matmul_precision("high") # set matmul precision to use either bfloat16 or tf32
-# torch.backends.cudnn.benchmark = True  # Selects the best conv algo
-
 
 def hubert_processor(audio, processor):
 

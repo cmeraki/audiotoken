@@ -8,6 +8,12 @@ from huggingface_hub import hf_hub_download, snapshot_download
 AUDIO_EXTS = ('.mp3', '.flac', '.wav', '.ogg', '.opus')
 TAR_EXTS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz')
 ZIP_EXTS = ('.zip', '.ZIP')
+SUPPORTED_LANGS = ('en', 'hi')
+
+class COMMONS(StrEnum):
+    SEMANTIC = auto()
+    ACOUSTIC = auto()
+    TEXT = auto()
 
 
 class Tokenizers(StrEnum):
@@ -52,7 +58,7 @@ class HubertEncoderConfig(EncoderConfig):
     pad_token: Optional[int] = 0
 
 @dataclass
-class HubertDecoderConfig(HubertEncoderConfig):
+class HubertDecoderConfig:
     pass
 
 @dataclass
@@ -72,23 +78,60 @@ class Wav2VecBertConfig(EncoderConfig):
     model_sample_rate: int = 16_000
     model_token_rate: int = 50
     output_layer: int = 19
-    quantizer_path: Optional[str] = hf_hub_download(
-        repo_id='cmeraki/w2vbert2_vq_quantizer',
-        repo_type='model',
-        revision='dcaa88d656395c0a8eaf61350d2f358cff3328ee',
-        filename='quantizer__L19_C2048_ckpt9000.pkl'
-    )
+    # quantizer_path: Optional[str] = hf_hub_download(
+    #     repo_id='cmeraki/w2vbert2_vq_quantizer',
+    #     repo_type='model',
+    #     revision='dcaa88d656395c0a8eaf61350d2f358cff3328ee',
+    #     filename='quantizer__L19_C2048_ckpt9000.pkl'
+    # )
+    quantizer_path: Optional[str] = 'data/quantizer__L19_C2048_ckpt8000.pkl'
     pad_token: Optional[int] = 0
 
 @dataclass
-class WhisperEncoderConfig:
-    model_id: str = 'openai/whisper-tiny'
-    model_sample_rate: int = 16_000
-    single_segment_duration: int = 30 # Whisper converts the audio to images of mel spectrograms
-    model_token_rate: int = 100 # Whisper has a fixed token rate
-    output_layer: int = -1
-    quantizer_path: Optional[str] = 'data/kmeans_whisper_xs/kmeans__L4_C1024_ckpt1450.pkl'
-    pad_token: Optional[int] = None
+class Wav2VecBertDecoderConfig:
+    en_model_id: str = ''
+    hi_model_id: str = 'data/w2vbert2_semantic_acoustic_gpt_hi.pt'
+
+    vocab_sizes = {
+        COMMONS.TEXT: 50257,
+        COMMONS.SEMANTIC: 2048,
+        COMMONS.ACOUSTIC: 2048,
+    }
+    max_source_tokens = 256
+
+    OFFSET = {
+        COMMONS.TEXT: 0,
+        COMMONS.SEMANTIC: vocab_sizes[COMMONS.TEXT],
+        COMMONS.ACOUSTIC: vocab_sizes[COMMONS.TEXT] + vocab_sizes[COMMONS.SEMANTIC],
+    }
+
+    max_token_value = 0
+    for i in OFFSET:
+        max_token_value = max(OFFSET[i] + vocab_sizes[i], max_token_value)
+
+    pad_token = {
+        COMMONS.TEXT: 50256,
+        COMMONS.SEMANTIC: max_token_value + 2,
+        COMMONS.ACOUSTIC: max_token_value + 3,
+    }  # type: ignore
+
+    coarse_codebooks = 2
+    per_codebook_size = 1024
+
+    INFER_TOKEN = {
+        COMMONS.TEXT: max_token_value + 4,
+        COMMONS.SEMANTIC: max_token_value + 5,
+        COMMONS.ACOUSTIC: max_token_value + 6
+    }
+
+    STOP_TOKEN = {
+        COMMONS.TEXT: max_token_value + 7,
+        COMMONS.SEMANTIC: max_token_value + 8,
+        COMMONS.ACOUSTIC: max_token_value + 9,
+    }
+
+    VOCAB_SIZE = (max(STOP_TOKEN.values()) // 64 + 1)*64
+
 
 @dataclass
 class AudioConfig:

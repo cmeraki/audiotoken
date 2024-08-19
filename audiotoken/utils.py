@@ -12,11 +12,17 @@ from torchaudio.io import StreamReader
 from encodec.utils import convert_audio
 from datasets import load_dataset
 from typing import IO, Generator, Union
+from contextlib import nullcontext
 
 from .configs import AudioConfig
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+ctx = nullcontext()
+if torch.cuda.is_available():
+    ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) # type: ignore
+
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
