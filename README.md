@@ -89,4 +89,6 @@ There are 3 APIs provided:
 
 1. `tokenizer.encode`: Encode single audio files/arrays at a time
 2. `tokenizer.encode_batch_files`: Encode multiple audio files in batches and save them to disk directly
+   1. **NOTE**: `encode_batch_files` is not safe to run multiple times on the same list of files as it can result in incorrect data.
+   This will be fixed in a future release.
 3. `tokenizer.decode`: Decode acoustic/semantic tokens. Note: Semantic tokens are decoded to acoustic tokens

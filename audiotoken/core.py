@@ -177,6 +177,8 @@ class AudioToken:
         ) -> None:
         """
         Encode a batch of audio files to tokens. The audio files can be provided as a list of paths or a directory.
+        **NOTE**: `encode_batch_files` is not safe to run multiple times on the same list of files as it can result in incorrect data.
+        This will be fixed in a future release.
 
         Args:
             batch_size (int): Batch size for encoding
