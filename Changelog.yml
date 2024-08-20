@@ -30,6 +30,5 @@ changelog:
       updated:
         - MAJOR_CHANGE: Tokenizer for `semantic_m` is updated. Previous tokenizer will not be valid with the new de tokenizer
         - README.md updated with batch API example
-        - Lazy loading of tokenizers (#16)
         - Decoder output is now first converted to float 32 before returning (#20)
         - Reorganized the repo
