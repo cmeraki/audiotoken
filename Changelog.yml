@@ -22,3 +22,13 @@ changelog:
         - All encode/decode APIs will have torch output
       bugfix:
         - Fixed bug in batch API where tokens length was not correctly calculated for `audio_dir` option
+  - version: 0.3.0
+    date: 2024-08-19
+    changes:
+      added:
+        - Added english decoder for `semantic_s`, hindi decoder for `semantic_m`
+      updated:
+        - MAJOR_CHANGE: Tokenizer for `semantic_m` is updated. Previous tokenizer will not be valid with the new de tokenizer
+        - README.md updated with batch API example
+        - Decoder output is now first converted to float 32 before returning (#20)
+        - Reorganized the repo

@@ -51,48 +51,51 @@ class AudioToken:
             encoder = AudioToken(tokenizer=Tokenizers.semantic_m, device='cuda:0')
             ```
         """
-        tokenizer_name = Tokenizers(tokenizer)
+        self.tokenizer_name = Tokenizers(tokenizer)
 
-        self.tokenizer: torch.nn.Module
+        self.encoder: Optional[torch.nn.Module] = None
         self.decoder: Optional[torch.nn.Module] = None
         self.model_config: EncoderConfig
         self.tranform_func: Optional[Callable] = None
-
+        self.compile = compile
+        self.kwargs = kwargs
         self.device = device
 
-        if tokenizer_name == Tokenizers.acoustic:
-            from .encoder import AcousticEncoder
-            from .configs import AcousticEncoderConfig
+    def load_encoder(self):
+        if self.encoder is None:
+            if self.tokenizer_name == Tokenizers.acoustic:
+                from .encoder import AcousticEncoder
+                from .configs import AcousticEncoderConfig
 
-            self.tokenizer = AcousticEncoder(device=device)
-            self.model_config = AcousticEncoderConfig()
+                self.encoder = AcousticEncoder(device=self.device)
+                self.model_config = AcousticEncoderConfig()
 
-        elif tokenizer_name == Tokenizers.semantic_s:
-            from transformers import Wav2Vec2FeatureExtractor
-            from .encoder import HubertEncoder, hubert_processor
-            from .configs import HubertEncoderConfig
+            elif self.tokenizer_name == Tokenizers.semantic_s:
+                from transformers import Wav2Vec2FeatureExtractor
+                from .encoder import HubertEncoder, hubert_processor
+                from .configs import HubertEncoderConfig
 
-            self.tokenizer = HubertEncoder(device=device)
-            self.model_config = HubertEncoderConfig()
+                self.encoder = HubertEncoder(device=self.device)
+                self.model_config = HubertEncoderConfig()
 
-            processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-            self.tranform_func = partial(hubert_processor, processor=processor)
+                processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
+                self.tranform_func = partial(hubert_processor, processor=processor)
 
-        elif tokenizer_name == Tokenizers.semantic_m:
-            from .encoder import Wav2VecBertEncoder
-            from .configs import Wav2VecBertConfig
+            elif self.tokenizer_name == Tokenizers.semantic_m:
+                from .encoder import Wav2VecBertEncoder
+                from .configs import Wav2VecBertConfig
 
-            self.tokenizer = Wav2VecBertEncoder(device=device, quantize=True)
-            self.model_config = Wav2VecBertConfig()
+                self.encoder = Wav2VecBertEncoder(device=self.device, quantize=True)
+                self.model_config = Wav2VecBertConfig()
 
-        else:
-            raise ValueError(f"Tokenizer {tokenizer} not supported")
+            else:
+                raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
 
-        self.tokenizer.eval()
-        if compile:
-            self.tokenizer = torch.compile(self.tokenizer)  # type: ignore
+            self.encoder.eval()
+            if self.compile:
+                self.encoder = torch.compile(self.encoder)  # type: ignore
 
-        logger.info(f"Initialized {tokenizer} tokenizer on {device} with compile={compile}")
+            logger.info(f"Initialized {self.tokenizer_name} encoder")
 
     def encode(
             self,
@@ -122,6 +125,7 @@ class AudioToken:
             encoded_audio = encoder.encode('path/to/audio.wav')
             ```
         """
+        self.load_encoder()
 
         if isinstance(audio, np.ndarray):
             return self._encode_single(torch.from_numpy(audio))
@@ -157,7 +161,7 @@ class AudioToken:
         input_batch = audio.to(self.device)
         attention_mask = torch.ones_like(input_batch, device=self.device)
 
-        toks = self.tokenizer(input_batch, attention_mask)
+        toks = self.encoder(input_batch, attention_mask) # type: ignore
 
         return toks.cpu()
 
@@ -171,6 +175,36 @@ class AudioToken:
             audio_dir: Optional[Union[os.PathLike, Path]] = None,
             **dataloader_kwargs
         ) -> None:
+        """
+        Encode a batch of audio files to tokens. The audio files can be provided as a list of paths or a directory.
+        **NOTE**: `encode_batch_files` is not safe to run multiple times on the same list of files as it can result in incorrect data.
+        This will be fixed in a future release.
+
+        Args:
+            batch_size (int): Batch size for encoding
+            outdir (os.PathLike): Output directory to save the encoded tokens
+            chunk_size (int, optional): Chunk size in seconds for batching audio files.
+                Each audio file is processed in chunks of `chunk_size` seconds. Defaults to 30.
+            num_workers (int, optional): Number of workers to load data. Defaults to 12.
+            audio_files (Optional[List[os.PathLike]], optional): List of path of audio files. The base name of every file should be unique. Defaults to None.
+            audio_dir (Optional[Union[os.PathLike, Path]], optional): Path where audio files can be found. Defaults to None.
+
+            Either `audio_files` or `audio_dir` must be provided.
+
+        Usage:
+            ```python
+            from audiotoken import AudioToken, Tokenizers
+            encoder = AudioToken(tokenizer=Tokenizers.acoustic, device='cuda:0')
+            encoder.encode_batch_files(
+                batch_size=12,
+                chunk_size=10,
+                num_workers=2,
+                outdir='path/to/save',
+                audio_files=['path/to/audio1.wav', 'path/to/audio2.wav'],
+            )
+            ```
+        """
+        self.load_encoder()
 
         assert audio_files or audio_dir, "Either audio_files or audio_dir must be provided"
         assert not (audio_files and audio_dir), "Provide either audio_files or audio_dir, not both"
@@ -205,13 +239,13 @@ class AudioToken:
         start_time = time.time()
 
         for idx, (input_ids, attention_masks, file_pointers) in tqdm(enumerate(dataloader)):
-            logger.info(f'Processing batch: {idx}')
+            logger.debug(f'Processing batch: {idx}')
 
             input_ids = input_ids.to(self.device)
             attention_masks = attention_masks.to(self.device)
-            encoded_audio = self.tokenizer(input_ids, attention_masks)
+            encoded_audio = self.encoder(input_ids, attention_masks) # type: ignore
 
-            logger.info(f"Processed batch: {idx}")
+            logger.debug(f"Processed batch: {idx}")
 
             for jdx, (tokens_batch, file_pointer) in enumerate(zip(encoded_audio, file_pointers)):
                 logger.debug(f"Submitted saving for iteration {jdx}, batch: {idx}")
@@ -222,13 +256,30 @@ class AudioToken:
 
                 save_rel_audio_tokens(tokens_batch, file_pointer, str(outdir), str(audio_dir))
 
-        logger.info(f"Encoding batch files took: {time.time() - start_time:.2f}s")
-
+        logger.debug(f"Encoding batch files took: {time.time() - start_time:.2f}s")
 
     def load_decoder(self):
         if self.decoder is None:
-            from .decoder import AcousticDecoder
-            self.decoder = AcousticDecoder(device=self.device)
+            if self.tokenizer_name == Tokenizers.acoustic:
+                from .decoder import AcousticDecoder
+                self.decoder = AcousticDecoder(device=self.device)
+
+            elif self.tokenizer_name == Tokenizers.semantic_s:
+                from .decoder import HubertDecoder
+                self.decoder = HubertDecoder(device=self.device)
+
+            elif self.tokenizer_name == Tokenizers.semantic_m:
+                from .decoder import Wav2VecBertDecoder
+                self.decoder = Wav2VecBertDecoder(device=self.device)
+
+            else:
+                raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
+
+            self.decoder.eval()
+            if self.compile:
+                self.decoder = torch.compile(self.decoder)  # type: ignore
+
+            logger.info(f"Initialized {self.tokenizer_name} decoder")
 
     def decode(
             self,
@@ -261,7 +312,7 @@ class AudioToken:
             raise ValueError(f"Unsupported input type {type(tokens)}. Should be one of: {np.ndarray, os.PathLike, Path}")
 
     def _decode_single(self, tokens: torch.Tensor) -> torch.Tensor:
-        input_batch = tokens.to(self.device, dtype=torch.int64)
+        input_batch = tokens.to(dtype=torch.long)
         toks = self.decoder(input_batch) # type:ignore
 
         return toks.cpu()
@@ -298,7 +349,7 @@ if __name__ == '__main__':
         save_audio(
             d,
             path=os.path.join(args.outdir, os.path.basename(p)),
-            sample_rate=tokenizer.model_config.model_sample_rate
+            sample_rate=24_000
         )
 
     # print('Running batch encode func with directory')
