@@ -17,6 +17,10 @@ setup(
     install_requires=[
         open("requirements.txt").read().splitlines(),
     ],
+    dependency_links=[
+        # Make sure to include the `#egg` portion so the `install_requires` recognizes the package
+        'git+https://github.com/suno-ai/bark.git#egg=bark',
+    ],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
