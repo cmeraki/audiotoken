@@ -59,7 +59,7 @@ class AudioToken:
 
         self.encoder: Optional[torch.nn.Module] = None
         self.decoder: Optional[torch.nn.Module] = None
-        self.model_config: Optional[EncoderConfig] = None
+        self.model_config: EncoderConfig
         self.transform_func: Optional[Callable] = None
         self.compile = compile
         self.kwargs = kwargs
@@ -71,24 +71,23 @@ class AudioToken:
         self.load_config()
 
     def load_config(self):
-        if self.model_config is None:
-            if self.tokenizer_name == Tokenizers.acoustic:
-                from .configs import AcousticEncoderConfig
-                self.model_config = AcousticEncoderConfig(
-                    bandwidth=num_codebooks_to_bandwidth(self.num_codebooks)
-                )
-            elif self.tokenizer_name == Tokenizers.semantic_s:
-                from .configs import HubertEncoderConfig
-                self.model_config = HubertEncoderConfig()
-            elif self.tokenizer_name == Tokenizers.semantic_m:
-                from .configs import Wav2VecBertConfig
-                self.model_config = Wav2VecBertConfig()
-            else:
-                raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
+        if self.tokenizer_name == Tokenizers.acoustic:
+            from .configs import AcousticEncoderConfig
+            self.model_config = AcousticEncoderConfig(
+                bandwidth=num_codebooks_to_bandwidth(self.num_codebooks)
+            )
+        elif self.tokenizer_name == Tokenizers.semantic_s:
+            from .configs import HubertEncoderConfig
+            self.model_config = HubertEncoderConfig()
+        elif self.tokenizer_name == Tokenizers.semantic_m:
+            from .configs import Wav2VecBertConfig
+            self.model_config = Wav2VecBertConfig()
+        else:
+            raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
 
-            self.model_sample_rate = self.model_config.model_sample_rate
+        self.model_sample_rate = self.model_config.model_sample_rate
 
-            logger.info(f"Initialized {self.tokenizer_name} config")
+        logger.info(f"Initialized {self.tokenizer_name} config")
 
     def load_encoder(self):
         if self.encoder is None:
