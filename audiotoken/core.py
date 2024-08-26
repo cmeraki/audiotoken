@@ -64,7 +64,7 @@ class AudioToken:
         self.compile = compile
         self.kwargs = kwargs
         self.device = device
-        self.num_codebooks = kwargs.get("num_codebooks", 8)
+        self.num_codebooks = kwargs.get("num_codebooks", 16)
 
         assert self.num_codebooks in [2, 4, 8, 16], "num_codebooks must be one of [2, 4, 8, 16]"
 
