@@ -9,7 +9,6 @@ from pathlib import Path
 
 from tqdm import tqdm
 from torchaudio.io import StreamReader
-from encodec.utils import convert_audio
 from datasets import load_dataset
 from typing import IO, Generator, Union
 from contextlib import nullcontext
@@ -23,16 +22,46 @@ ctx = nullcontext()
 if torch.cuda.is_available():
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) # type: ignore
 
+# Helper function from encodec
+def convert_audio(
+        audio: torch.Tensor,
+        sample_rate: int,
+        target_sample_rate: int,
+    ):
+    num_channels, _ = audio.shape
+
+    if num_channels == 2:
+        logger.warning(f"Provided audio is stereo, converting to mono")
+        audio = audio.mean(-2, keepdim=True)
+    elif num_channels == 1:
+        pass
+    else:
+        raise RuntimeError(f"Only mono or stereo audio is supported")
+
+    if sample_rate != target_sample_rate:
+        audio = torchaudio.transforms.Resample(sample_rate, target_sample_rate)(audio)
+
+    return audio
+
 
 def read_audio(x: os.PathLike, model_sample_rate: int) -> torch.Tensor:
     """
     Given an audio file, this function reads the audio file and returns the audio tensor
-    suitable for processing by the model
+    suitable for processing by the model.
+
+    Args:
+        x (os.PathLike): The path to the audio file
+        model_sample_rate (int): The sample rate of the model
+
+    Raises:
+        RuntimeError: If the audio file is not mono or if the audio loaded is not 2D
+
+    Returns:
+        torch.Tensor: The audio tensor
     """
     audio, sr = torchaudio.load(x)
-    audio = convert_audio(audio, sr, model_sample_rate, 1)
-    assert audio.shape[0] == 1, f"Audio needs to be mono, provided {audio.shape[0]} channels for {x}"
-    assert audio.dim() == 2, f"Audio needs to be 2D tensor, provided {audio.dim()}D for {x}"
+    assert audio.dim() == 2, f"Audio needs to be 2D array, provided {audio.dim()}D for {x}"
+    audio = convert_audio(audio, sr, model_sample_rate)
 
     logger.debug(f"Processed audio file {x}, shape {audio.shape}, length in seconds {audio.shape[1] / model_sample_rate}")
 
@@ -47,6 +76,8 @@ def process_audio_chunks(
 ):
     streamer = StreamReader(file_stream)
     metadata = streamer.get_src_stream_info(0)
+
+    #TODO: Extract complete length of the audio from the metadata and return it
 
     streamer.add_basic_audio_stream(
         frames_per_chunk=int(chunk_size*metadata.sample_rate),
@@ -382,3 +413,31 @@ def save_audio(
         wav = wav.clamp(-limit, limit)
 
     torchaudio.save(path, wav, sample_rate=sample_rate, encoding='PCM_S', bits_per_sample=16)
+
+
+def bandwidth_to_num_codebooks(bandwidth: float) -> int:
+    """
+    Convert bandwidth to number of codebooks for Encodec
+    """
+
+    return {
+        1.5: 2,
+        3: 4,
+        6: 8,
+        12: 16,
+        24: 32
+    }[bandwidth]
+
+
+def num_codebooks_to_bandwidth(num_codebooks: int) -> float:
+    """
+    Convert number of codebooks to bandwidth for Encodec
+    """
+
+    # Supported bandwidths are 1.5kbps (n_q = 2), 3 kbps (n_q = 4), 6 kbps (n_q = 8) and 12 kbps (n_q =16) and 24kbps (n_q=32).
+    return {
+        2: 1.5,
+        4: 3,
+        8: 6,
+        16: 12
+    }[num_codebooks]

@@ -57,10 +57,7 @@ from audiotoken import AudioToken, Tokenizers
 
 semantic_tokenizer = AudioToken(tokenizer=Tokenizers.semantic_s, device='cuda:0')
 semantic_toks = semantic_tokenizer.encode(Path('path/to/audio.wav'))
-acoustic_toks = semantic_tokenizer.decode(semantic_toks)
-
-acoustic_tokenizer = AudioToken(tokenizer=Tokenizers.acoustic, device='cuda:0')
-decoded_audio = acoustic_tokenizer.decode(acoustic_toks)
+decoded_audio = semantic_tokenizer.decode(semantic_toks)
 
 # Save the decoded audio and compare it with the original audio
 import torch
@@ -91,4 +88,4 @@ There are 3 APIs provided:
 2. `tokenizer.encode_batch_files`: Encode multiple audio files in batches and save them to disk directly
    1. **NOTE**: `encode_batch_files` is not safe to run multiple times on the same list of files as it can result in incorrect data.
    This will be fixed in a future release.
-3. `tokenizer.decode`: Decode acoustic/semantic tokens. Note: Semantic tokens are decoded to acoustic tokens
+3. `tokenizer.decode`: Decode acoustic/semantic tokens

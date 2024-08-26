@@ -32,3 +32,14 @@ changelog:
         - README.md updated with batch API example
         - Decoder output is now first converted to float 32 before returning (#20)
         - Reorganized the repo
+  - version: 0.3.1
+    date: 2024-08-26
+    changes:
+      added:
+        - Exposed `num_codebooks` while doing class init. Give option of bandwidth in acoustic encoder/decoder (#21)
+        - Exposed `model_sample_rate` in `AudioToken` class that can be used to resample arrays
+      bugfix:
+        - Fixed a bug in semantic_s tokenizer in encode API where the processor was not applied
+      updated:
+        - Updated API docstrings
+        - Semantic decoder now outputs audio instead of tokens
