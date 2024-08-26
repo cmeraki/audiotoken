@@ -80,7 +80,7 @@ class HubertDecoder(torch.nn.Module):
     def __init__(
             self,
             config: 'HubertDecoderConfig' = HubertDecoderConfig(),
-            lanugage: str = COMMONS.EN,
+            language: str = COMMONS.EN,
             device: str = 'cpu'
         ):
 
@@ -88,7 +88,7 @@ class HubertDecoder(torch.nn.Module):
 
        self.device = device
        self.config = config
-       assert lanugage in self.config.suported_languages, f'{lanugage} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
+       assert language in self.config.suported_languages, f'{language} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
        model_id = self.config.en_model_id
 
        self.model = get_model(
@@ -104,6 +104,7 @@ class HubertDecoder(torch.nn.Module):
            use_gpu=True if 'cuda' in self.device else False,
            model_type="fine"
        )
+       self.acoustic_decoder = AcousticDecoder(config=AcousticDecoderConfig(bandwidth=6), device=self.device)
 
     def nar_bark(self, tokens_02):
         tokens_02 = _deserialize_acoustic_tokens(tokens_02)
@@ -152,7 +153,9 @@ class HubertDecoder(torch.nn.Module):
 
         acoustic_tokens = self.nar_bark(target_tokens)
 
-        return acoustic_tokens
+        wav = self.acoustic_decoder(acoustic_tokens)
+
+        return wav
 
 
 class Wav2VecBertDecoder(torch.nn.Module):
@@ -165,15 +168,15 @@ class Wav2VecBertDecoder(torch.nn.Module):
     def __init__(
             self,
             config: 'Wav2VecBertDecoderConfig' = Wav2VecBertDecoderConfig(),
-            lanugage: str = COMMONS.HI,
+            language: str = COMMONS.HI,
             device: str = 'cpu'
         ):
         super().__init__()
 
         self.device = device
         self.config = config
-        assert lanugage in self.config.suported_languages, f'{lanugage} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
-        model_id = self.config.hi_model_id if lanugage == COMMONS.HI else self.config.en_model_id
+        assert language in self.config.suported_languages, f'{language} language not supported for the decoder. Only {self.config.suported_languages} are supported.'
+        model_id = self.config.hi_model_id if language == COMMONS.HI else self.config.en_model_id
 
         self.model = get_model(
             vocab_size=self.config.VOCAB_SIZE,
@@ -188,6 +191,7 @@ class Wav2VecBertDecoder(torch.nn.Module):
             use_gpu=True if 'cuda' in self.device else False,
             model_type="fine"
         )
+        self.acoustic_decoder = AcousticDecoder(config=AcousticDecoderConfig(bandwidth=6), device=self.device)
 
     def nar_bark(self, tokens_02):
         tokens_02 = _deserialize_acoustic_tokens(tokens_02)
@@ -236,4 +240,6 @@ class Wav2VecBertDecoder(torch.nn.Module):
 
         acoustic_tokens = self.nar_bark(target_tokens)
 
-        return acoustic_tokens
+        wav = self.acoustic_decoder(acoustic_tokens)
+
+        return wav

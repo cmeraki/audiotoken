@@ -10,7 +10,7 @@ from typing import List, Union, Optional, Callable
 from torch.utils.data import DataLoader
 
 from .logger import get_logger
-from .configs import Tokenizers, EncoderConfig, AUDIO_EXTS
+from .configs import Tokenizers, EncoderConfig
 from .datasets import AudioBatchDataset, collate_fn
 from .utils import (
     read_audio,
@@ -18,7 +18,8 @@ from .utils import (
     process_audio_chunks,
     save_audio_tokens,
     sanitize_path,
-    save_rel_audio_tokens
+    save_rel_audio_tokens,
+    num_codebooks_to_bandwidth
 )
 
 logger = get_logger(__name__, log_file=None, level="WARNING")
@@ -41,6 +42,9 @@ class AudioToken:
             device (str, optional): Device to use for the tokenizer. Defaults to "cpu".
             compile (bool, optional): Weather to compile the model or not. Defaults to False.
                 Note: When you use compile, the first encoding will be slow but subsequent encodings will be faster
+            kwargs (dict, optional): Additional keyword arguments to pass to the encoder.
+                - Supported kwargs:
+                    - num_codebooks (int, optional): Number of codebooks to use for acoustic tokenizer. Defaults to 8.
 
         Raises:
             ValueError: If the tokenizer is not supported
@@ -56,37 +60,53 @@ class AudioToken:
         self.encoder: Optional[torch.nn.Module] = None
         self.decoder: Optional[torch.nn.Module] = None
         self.model_config: EncoderConfig
-        self.tranform_func: Optional[Callable] = None
+        self.transform_func: Optional[Callable] = None
         self.compile = compile
         self.kwargs = kwargs
         self.device = device
+        self.num_codebooks = kwargs.get("num_codebooks", 16)
+
+        assert self.num_codebooks in [2, 4, 8, 16], "num_codebooks must be one of [2, 4, 8, 16]"
+
+        self.load_config()
+
+    def load_config(self):
+        if self.tokenizer_name == Tokenizers.acoustic:
+            from .configs import AcousticEncoderConfig
+            self.model_config = AcousticEncoderConfig(
+                bandwidth=num_codebooks_to_bandwidth(self.num_codebooks)
+            )
+        elif self.tokenizer_name == Tokenizers.semantic_s:
+            from .configs import HubertEncoderConfig
+            self.model_config = HubertEncoderConfig()
+        elif self.tokenizer_name == Tokenizers.semantic_m:
+            from .configs import Wav2VecBertConfig
+            self.model_config = Wav2VecBertConfig()
+        else:
+            raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
+
+        self.model_sample_rate = self.model_config.model_sample_rate
+
+        logger.info(f"Initialized {self.tokenizer_name} config")
 
     def load_encoder(self):
         if self.encoder is None:
             if self.tokenizer_name == Tokenizers.acoustic:
                 from .encoder import AcousticEncoder
-                from .configs import AcousticEncoderConfig
 
-                self.encoder = AcousticEncoder(device=self.device)
-                self.model_config = AcousticEncoderConfig()
+                self.encoder = AcousticEncoder(device=self.device, config=self.model_config)
 
             elif self.tokenizer_name == Tokenizers.semantic_s:
                 from transformers import Wav2Vec2FeatureExtractor
                 from .encoder import HubertEncoder, hubert_processor
-                from .configs import HubertEncoderConfig
 
-                self.encoder = HubertEncoder(device=self.device)
-                self.model_config = HubertEncoderConfig()
-
-                processor = Wav2Vec2FeatureExtractor.from_pretrained(HubertEncoderConfig.model_id)
-                self.tranform_func = partial(hubert_processor, processor=processor)
+                self.encoder = HubertEncoder(config=self.model_config, device=self.device)
+                processor = Wav2Vec2FeatureExtractor.from_pretrained(self.model_config.model_id)
+                self.transform_func = partial(hubert_processor, processor=processor)
 
             elif self.tokenizer_name == Tokenizers.semantic_m:
                 from .encoder import Wav2VecBertEncoder
-                from .configs import Wav2VecBertConfig
-
-                self.encoder = Wav2VecBertEncoder(device=self.device, quantize=True)
-                self.model_config = Wav2VecBertConfig()
+                self.encoder = Wav2VecBertEncoder(config=self.model_config, device=self.device, quantize=True)
 
             else:
                 raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
@@ -103,7 +123,10 @@ class AudioToken:
             chunk_size: Optional[int] = None
         ) -> torch.Tensor:
         """
-        Encode the audio file to tokens. The audio can be provided as a numpy array, path to the audio file, or bytes.
+        Encode the audio to tokens. The audio can be provided as a numpy array, torch tensor or path to the audio file.
+        If provided as numpy array or torch tensor, the audio is expected to be in the shape of (1, num_samples) and sampled at `tokenizer.model_sample_rate`.
+
+        If provided as a path to the audio file, the audio will be read, converted to the shape of (1, num_samples) and sampled at `tokenizer.model_sample_rate`. If the audio is stereo, it will be converted to mono before sampling.
 
         Args:
             audio (Union[np.ndarray, os.PathLike, bytes, Path]): Audio to encode
@@ -113,10 +136,10 @@ class AudioToken:
 
         Raises:
             NotImplementedError: If the provided `audio` is bytes
-            ValueError: If the provided `audio` is not one of [np.ndarray, os.PathLike, bytes, Path]
+            ValueError: If the provided `audio` is not one of [np.ndarray, torch.Tensor, os.PathLike, Path]
 
         Returns:
-            np.ndarray: Encoded tokens in the shape of (1, 16, num_tokens) for a single audio file
+            torch.Tensor: Encoded tokens in the shape of (1, num_codebooks, num_tokens) for a single audio file
 
         Usage:
             ```python
@@ -128,9 +151,13 @@ class AudioToken:
         self.load_encoder()
 
         if isinstance(audio, np.ndarray):
+            assert audio.ndim == 2, "Audio must be 2D array"
+            assert audio.shape[0] == 1, "Audio must mono"
             return self._encode_single(torch.from_numpy(audio))
 
         elif isinstance(audio, torch.Tensor):
+            assert audio.ndim == 2, "Audio must be 2D array"
+            assert audio.shape[0] == 1, "Audio must mono"
             return self._encode_single(audio)
 
         elif isinstance(audio, os.PathLike) or isinstance(audio, Path):
@@ -158,6 +185,9 @@ class AudioToken:
             raise ValueError(f"Unsupported input type {type(audio)}. Should be one of: {np.ndarray, os.PathLike, bytes, Path}")
 
     def _encode_single(self, audio: torch.Tensor) -> torch.Tensor:
+        if self.transform_func:
+            audio = self.transform_func(audio)
+
         input_batch = audio.to(self.device)
         attention_mask = torch.ones_like(input_batch, device=self.device)
 
@@ -220,7 +250,7 @@ class AudioToken:
         dataset = AudioBatchDataset(
             audio_files=audio_files, # type: ignore
             audio_dir=audio_dir, # type: ignore
-            transform=self.tranform_func,
+            transform=self.transform_func,
             chunk_size=chunk_size,
             sample_rate=self.model_config.model_sample_rate,
             model_token_rate=self.model_config.model_token_rate,
@@ -258,19 +288,22 @@ class AudioToken:
 
         logger.debug(f"Encoding batch files took: {time.time() - start_time:.2f}s")
 
-    def load_decoder(self):
+    def load_decoder(self, **kwargs):
         if self.decoder is None:
             if self.tokenizer_name == Tokenizers.acoustic:
                 from .decoder import AcousticDecoder
-                self.decoder = AcousticDecoder(device=self.device)
+                from .configs import AcousticDecoderConfig
+
+                cfg = AcousticDecoderConfig(bandwidth=num_codebooks_to_bandwidth(self.num_codebooks))
+                self.decoder = AcousticDecoder(config=cfg, device=self.device, **kwargs)
 
             elif self.tokenizer_name == Tokenizers.semantic_s:
                 from .decoder import HubertDecoder
-                self.decoder = HubertDecoder(device=self.device)
+                self.decoder = HubertDecoder(device=self.device, **kwargs)
 
             elif self.tokenizer_name == Tokenizers.semantic_m:
                 from .decoder import Wav2VecBertDecoder
-                self.decoder = Wav2VecBertDecoder(device=self.device)
+                self.decoder = Wav2VecBertDecoder(device=self.device, **kwargs)
 
             else:
                 raise ValueError(f"Tokenizer {self.tokenizer_name} not supported")
@@ -284,9 +317,16 @@ class AudioToken:
     def decode(
             self,
             tokens: Union[torch.Tensor, np.ndarray, os.PathLike, Path],
+            **kwargs
         ) -> torch.Tensor:
         """
-        Decode the tokens back to audio
+        Decode the tokens back to audio. Tokens should be in the shape of (1, num_codebooks, num_tokens) for a single audio
+
+        Args:
+            tokens (Union[torch.Tensor, np.ndarray, os.PathLike, Path]): Tokens to decode
+
+        Returns:
+            torch.Tensor: Decoded audio in the shape of (1, num_samples)
 
         Usage:
             ```python
@@ -296,7 +336,7 @@ class AudioToken:
             decoded_audio = encoder.decode(encoded_audio)
             ```
         """
-        self.load_decoder()
+        self.load_decoder(**kwargs)
 
         if isinstance(tokens, np.ndarray):
             return self._decode_single(torch.from_numpy(tokens))
@@ -308,6 +348,7 @@ class AudioToken:
             tokens_mem = torch.load(tokens, map_location=self.device)
             logger.debug(f'Loaded tokens from path {tokens_mem.shape}')
             return self._decode_single(tokens_mem)
+
         else:
             raise ValueError(f"Unsupported input type {type(tokens)}. Should be one of: {np.ndarray, os.PathLike, Path}")
 
